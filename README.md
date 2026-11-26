@@ -71,8 +71,9 @@ ui/            注入到客户端前端/主进程的代码
 tools/         CLI 与安装
   query.py           输出当前会话状态 JSON（技能用）
   install.py / uninstall.py
+  _proc.py           统一的子进程调用（强制 UTF-8，见下方「编码约定」）
   sync_billing.py    计费规则同步
-  test_billing.py    计费回归测试
+  test_billing.py    计费回归测试（34 项）
   selftest.py        一键体检
   repair_backup.py   备份丢失时从已注入的 asar 反推干净版
 skills/        agent 技能（hud / ledger）
@@ -110,6 +111,19 @@ python tools/test_billing.py                   # 31 项回归
 
 `python tools/selftest.py` 是「体检」：插件文件齐不齐、库能不能读、客户端补丁状态是否一致、备份在不在。
 它只读，不改任何东西。
+
+## 编码约定（踩过坑，别改回去）
+
+Windows 默认代码页是 936（GBK），但 node 永远输出 UTF-8。用
+`subprocess.run(..., text=True)` 不加 `encoding` 时，父进程会按 GBK 解码 node 的中文输出，
+读线程直接抛 `UnicodeDecodeError`——**子进程被判失败，哪怕它已经成功**。
+
+所以：**所有捕获输出的子进程调用一律走 `tools/_proc.py`**，它同时钉住两端：
+
+- 子进程：`PYTHONUTF8=1` + `PYTHONIOENCODING=utf-8`
+- 父进程：`encoding="utf-8", errors="replace"`
+
+`test_billing.py` 里有一条 AST 检查会扫描全仓库，发现裸 `text=True` 就红。
 
 ## 已知限制
 
