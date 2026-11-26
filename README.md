@@ -1,50 +1,105 @@
-# 项目名
+# wb-hud · WorkBuddy 工作台
 
-一个用 ai-era-ci 技能配好的 Python 项目骨架。检查拆成三个时候：
+在 WorkBuddy 客户端里加一条状态条和一本账本：**上下文占用、积分/费用消耗、当前模型、git 分支、工具与子代理活动**。
 
-| | 什么时候跑 | 查什么 | 放在哪 |
-|---|---|---|---|
-| ① | 每次 `git commit` 之前 | 格式、lint（几秒） | `.pre-commit-config.yaml` |
-| ② | 开 PR 时 | 只跑和这次改动相关的测试，限时 5 分钟 | `.github/workflows/pr-fast.yml` |
-| ③ | 合进 `main` 之后 | 全部测试，含慢测试 | `.github/workflows/main-full.yml` |
+> ⚠️ **它会修改本机客户端文件（`app.asar`）**。这是本机个人用的工具，不是给所有人装的通用软件。
+> 安装脚本会先备份原版、失败自动还原；`uninstall.cmd` 可完全回退。
+> 请只在你自己的机器上使用，并自行评估风险。
 
-## 开始用
+## 装 / 卸
 
-1. 点右上角 **Use this template** → 建你自己的仓库
-2. 本地克隆后装一次钩子：
+```bash
+# 装（会关闭并重启 WorkBuddy，约 40 秒）
+install.cmd
 
-   ```bash
-   pip install -e ".[dev]"
-   pre-commit install
-   ```
-
-3. 把 `app/` 换成你的代码，`tests/` 换成你的测试
-4. 改了依赖，记得同步改 `pyproject.toml` 里的 `[project.optional-dependencies]`
-
-## 三个地方可能要改
-
-| 要改什么 | 改哪 |
-|---|---|
-| 安装命令不是 `pip install -e ".[dev]"` | `pr-fast.yml` / `main-full.yml` 里那行 `run:` |
-| Python 版本不是 3.12 | 两个 workflow 里的 `python-version` |
-| 默认分支不叫 `main` | `main-full.yml` 的 `branches:` |
-
-## 慢测试怎么标
-
-```python
-import pytest
-
-pytestmark = pytest.mark.slow  # 整个文件都是慢测试
+# 卸（还原客户端原版并重启）
+uninstall.cmd
 ```
 
-或者单个函数上加 `@pytest.mark.slow`。
+前置：Python 3.10+ 在 PATH 里；客户端默认装在 `D:\workbuddy`（路径写死在 `ui/patch.py` 的 `APP`，装在别处要改）。
 
-## 两个人踩过的坑（已修，别改回去）
+## 显示什么
 
-- `scripts/related_tests.py` 里用 `.as_posix()` 而不是 `str(path)`：Windows 上路径是反斜杠，跟 `git diff` 给的正斜杠对不上，会导致**一个测试都不选却显示绿灯**。
-- `batch.py`（本模板未包含）里的 `HEAVY` 命令用双引号：`shell=True` 在 Windows 走 cmd.exe，不认单引号。
+| 位置 | 内容 |
+|---|---|
+| 状态条第 1 行 | `模型 │ 项目 git:(分支*) │ 输入/输出/缓存 token` |
+| 状态条第 2 行 | `Context 46% (459k/1.00M) │ 积分 275.08 │ 费用 ¥16.60` |
+| 侧栏账本 | 本会话 / 今日 / 本周 / 累计、按模型、按会话、按日 |
+| 消息底部 | 这一轮消耗（`◇ 5.54` 积分 或 `¥3.5000`），悬浮看 token 明细 |
+| 设置面板 | 开关各段显示、自定义单价、账本模式（自动/积分/费用） |
 
-## 这个模板没包含什么
+## 计费口径（本项目最容易搞错的地方）
 
-- ④ 特性开关、攒批：需要真实用户量或大量 PR 才有意义，按需再加
-- JS/TS 版：`pr-fast.yml` 里有注释说明怎么换成 Vitest
+同一台机器上可能同时存在两种计费方式，**它们不是一回事，不能相加**：
+
+| 计费来源 | 判定依据 | 记录方式 |
+|---|---|---|
+| 平台模型 | `requestModelId` **无前缀**（如 `deepseek-v4.1-flash`） | 扣**积分**，由服务端按请求写入 `credit_json` |
+| 自定义模型 | `requestModelId` 以 **`custom-local:`** 开头 | 按 **token × 分时段单价** 算**人民币**，不占积分 |
+
+判断依据是**请求走的是谁的密钥**（前缀），不是模型名——模型名会随版本变，前缀不会。
+
+同一个会话里可以在两者之间来回切，所以单位是**逐请求**的属性：
+
+- 每一轮的消耗行按**这一轮自己**的单位显示；
+- 状态条/账本的 `自动` 模式跟随**最近一次请求**的单位；
+- 一个会话两种都用过时，主数字显示当前单位，另一种单位用暗色小字并列，不会丢。
+
+规则与单价只有两份真源：
+
+| 文件 | 作用 |
+|---|---|
+| `tools/billing.json` | 计费前缀、分时段单价、按模型价格表 |
+| `ui/billing_core.js` | 判定与计价逻辑 |
+
+改完必须同步（`main_addon.js` 里是内联副本，因为 asar 里不能 `require` 外部文件）：
+
+```bash
+python tools/sync_billing.py     # 数据 + 逻辑 → 内联进主进程
+python tools/test_billing.py     # 31 项回归，全过才算改对
+```
+
+## 目录
+
+```
+ui/            注入到客户端前端/主进程的代码
+  inject.js          状态条 + 侧栏 + 抽屉（构建产物：由 round_meter.js 合并而来）
+  round_meter.js     消息末尾「本轮消耗」行（源文件）
+  main_addon.js      主进程：读库、扫日志、算账（构建产物：由 billing_core.js 内联而来）
+  billing_core.js    计费规则与计价（源文件）
+  patch.py           asar 注入 / 备份 / 校验 / 反推干净版
+tools/         CLI 与安装
+  query.py           输出当前会话状态 JSON（技能用）
+  install.py / uninstall.py
+  sync_billing.py    计费规则同步
+  test_billing.py    计费回归测试
+  selftest.py        一键体检
+  repair_backup.py   备份丢失时从已注入的 asar 反推干净版
+skills/        agent 技能（hud / ledger）
+scripts/       CI 用：按改动范围决定跑哪些检查
+```
+
+两个「构建产物」改完源文件后要重新生成：
+
+```bash
+python tools/merge_round_meter.py   # round_meter.js → inject.js
+python tools/sync_billing.py        # billing_core.js → main_addon.js
+```
+
+## CI：检查拆成三个时候
+
+| | 什么时候 | 跑什么 | 在哪 |
+|---|---|---|---|
+| ① | `git commit` 前 | ruff、计费规则是否同步、JS 语法 | `.pre-commit-config.yaml` |
+| ② | 开 PR 时 | 按改动范围只跑相关的（限时 5 分钟） | `.github/workflows/pr-fast.yml` |
+| ③ | 合进 `main` 后 | 全部：ruff + 语法 + 同步检查 + 31 项回归 | `.github/workflows/main-full.yml` |
+
+为什么要这么拆：AI 写代码时一天能出几十个 PR，每个都跑全量，CI 就排队、烧额度。
+② 只跑「这次改到的部分」，③ 才做全量兜底。这套做法来自 [ai-era-ci](https://github.com/cooler1oo/ai-era-ci-template) 技能。
+
+## 已知限制
+
+- **只在 Windows 上验证过**：注入逻辑基于 asar 结构与 exe 内哈希，macOS/Linux 版本没试。
+- 客户端升级后需要重跑 `install.cmd`（升级会覆盖 `app.asar`）。备份丢失时安装脚本会按注入标记反推干净版，不依赖历史备份。
+- 「今日/按日」按请求时间精确归日（`credit_json` 的键前 12 位是 ULID 时间戳）；一条请求 ID 若不是 ULID（库里有极少数普通 UUID），该条不计入按日统计。
+- 费用按 `tools/billing.json` 的单价估算；模型没配价格时按默认价算，悬浮卡会标「未配置单价，按默认价估算」。

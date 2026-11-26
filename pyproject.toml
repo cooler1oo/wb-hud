@@ -1,29 +1,19 @@
-[project]
-name = "app"
-version = "0.1.0"
-description = "从这里开始写你的项目"
-requires-python = ">=3.10"
-
-# CI 里那句 `pip install -e ".[dev]"` 装的就是这一组。
-# 少了它，workflow 装完依赖仍然没有 pytest / ruff，第二步会报 No module named pytest。
-[project.optional-dependencies]
-dev = ["pytest>=8", "ruff>=0.6"]
-
-[build-system]
-requires = ["setuptools>=68"]
-build-backend = "setuptools.build_meta"
-
-[tool.setuptools]
-packages = ["app"]
-
-[tool.pytest.ini_options]
-pythonpath = ["."]
-testpaths = ["tests"]
-markers = ["slow: 慢测试，PR 上不跑，留到合进 main 之后跑"]
+# 本仓库不是一个可安装的 Python 包：这里的脚本是给 WorkBuddy 客户端打补丁用的，
+# 由 tools/install.py 原地运行，不需要 pip install。所以没有 [project] / [build-system]。
+# 这里只放工具配置，CI 里用 `pip install ruff` 就够。
 
 [tool.ruff]
-line-length = 88
+line-length = 100
 
-# 钉住经典规则集合。新版 ruff 的默认规则变多，不钉的话模板脚本自己会先报错。
+# 钉住经典规则集合（语法错、未定义名、未使用导入）。
+# 不选 E5 是有意的：本仓库有大量中文字符串与拼接，行长不是重点，别为了格式化制造无意义 diff。
 [tool.ruff.lint]
 select = ["E4", "E7", "E9", "F"]
+
+[tool.ruff.lint.per-file-ignores]
+# E402：这些脚本必须先把 ui/ 插进 sys.path 才能 import patch，导入顺序无法上移。
+# E722：安装/补丁脚本里有刻意保留的宽 except（客户端环境千奇百怪，抛栈比静默更糟）。
+"tools/install.py" = ["E402", "E722"]
+"tools/uninstall.py" = ["E402"]
+"tools/selftest.py" = ["E402"]
+"ui/patch.py" = ["E722"]

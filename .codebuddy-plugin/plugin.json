@@ -1,0 +1,16 @@
+{
+  "name": "workbench-hud",
+  "version": "1.1.0",
+  "description": "实时工作台：上下文占用、积分与费用（¥）双计费、会话账本。按 requestModelId 前缀识别计费来源，换模型实时切换单位。含 hud/ledger 两个技能。",
+  "author": {
+    "name": "local",
+    "email": ""
+  },
+  "homepage": "",
+  "repository": "",
+  "license": "MIT",
+  "skills": [
+    "./skills/hud",
+    "./skills/ledger"
+  ]
+}

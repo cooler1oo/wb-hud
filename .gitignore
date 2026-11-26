@@ -3,3 +3,17 @@ __pycache__/
 .pytest_cache/
 .ruff_cache/
 *.egg-info/
+*.pyc
+
+# —— 运行时产物，绝不入库 ——
+# .modelmap.json 里是「请求 ID → 模型名」的全量索引，体积大且属于本机会话数据
+# .hist.json 是本机会话的 token 历史缓存
+# .mount-diag.json 是客户端 DOM 诊断（含界面文案）
+# install.log 是补丁日志；*.wbbackup 是客户端原版备份（几百 MB）
+tools/.modelmap.json
+tools/.hist.json
+tools/.mount-diag.json
+tools/install.log
+*.wbbackup
+*.wbbackup.stamp
+*.derived

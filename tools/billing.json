@@ -1,0 +1,20 @@
+{
+  "_note": "计费规则唯一真源。改完运行 `python tools/sync_billing.py`，再重新安装（install.cmd）生效。判定依据是 requestModelId 的前缀（计费来源），不是模型名——模型名会随版本变，前缀不会。",
+  "version": 2,
+  "tzOffset": 8,
+  "feePrefixes": ["custom-local:"],
+  "feePatterns": [],
+  "idleHours": [22, 8],
+  "pricing": {
+    "default": {
+      "idle": { "input": 1.0, "output": 4.0, "cacheRead": 0.02 },
+      "busy": { "input": 2.0, "output": 8.0, "cacheRead": 0.04 }
+    },
+    "models": {
+      "deepseek-v4.1-flash-1017": {
+        "idle": { "input": 1.0, "output": 4.0, "cacheRead": 0.02 },
+        "busy": { "input": 2.0, "output": 8.0, "cacheRead": 0.04 }
+      }
+    }
+  }
+}

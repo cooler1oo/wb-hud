@@ -1,0 +1,605 @@
+/* WorkBuddy 工作台 · 原生位置样式
+ * 2026-11-21 视觉改版：
+ *   · 建立统一令牌（间距 4/8/12/16、圆角 8、字号 10/11/12/13/20）
+ *   · 侧栏改为「一个主角（上下文占用）+ 安静列表（积分）」，去掉等权重磁贴
+ *   · 状态条模型名回归中性色，蓝色只留给可交互元素
+ *   · 分区标题改中文小字，去掉全大写 + 字距的"模板感"
+ *   · 状态条与卡片不再出现大片空白与重复数字
+ * 状态条：两行（对齐 claude-hud 默认布局），最大 46px，绝不撑开会话区。
+ * 折叠：18px 细条，仍是可点入口。
+ * 账本：原生侧边栏内的摘要卡 + 可关闭抽屉；不使用 position:fixed 做大面积遮挡。
+ */
+
+#wb-hud {
+  --wb-gap: 8px;
+  --wb-r: 8px;
+  --wb-fg: var(--vscode-foreground, #c3ced9);
+  --wb-fg-dim: var(--vscode-descriptionForeground, #8b98a5);
+  --wb-fg-mute: #7c8894;
+  --wb-line: var(--vscode-widget-border, rgba(255, 255, 255, .09));
+  --wb-accent: var(--vscode-charts-blue, #4c9aff);
+  --wb-ok: var(--vscode-charts-green, #3fb950);
+  --wb-warn: var(--vscode-charts-orange, #e3b341);
+  --wb-bad: var(--vscode-charts-red, #f85149);
+
+  width: 100%;
+  box-sizing: border-box;
+  padding: 4px 12px 5px;
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+  font: 12px/1.55 var(--vscode-editor-font-family, "Microsoft YaHei UI", system-ui, sans-serif);
+  color: var(--wb-fg);
+  user-select: none;
+  white-space: nowrap;
+  overflow: hidden;
+  max-height: 52px;
+}
+#wb-hud.extra { max-height: 108px; }
+#wb-hud.collapsed { max-height: 22px; padding: 2px 12px; }
+#wb-hud.collapsed > .hud-line { display: none !important; }
+#wb-hud.collapsed > .hud-mini { display: flex !important; }
+
+/* ---------- 状态条：两行 ---------- */
+#wb-hud .hud-line {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  overflow: hidden;
+  white-space: nowrap;
+  min-height: 18px;
+  height: 18px;
+  flex: 0 0 auto;
+}
+#wb-hud .hud-mini { display: none; }
+
+/* 模型：中性色 + 稍重，不抢焦点（颜色可配，默认跟随主题） */
+#wb-hud .hud-model {
+  color: var(--wb-fg);
+  font-weight: 600;
+  flex: 0 0 auto;
+  letter-spacing: .2px;
+}
+/* 项目/路径：次级信息 */
+#wb-hud .hud-proj {
+  color: var(--wb-fg-dim);
+  font-weight: 400;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  min-width: 0;
+}
+/* 分隔符：更轻 */
+#wb-hud .hud-pipe { opacity: .22; flex: 0 0 auto; }
+#wb-hud .hud-k { color: var(--wb-fg-dim); flex: 0 0 auto; }
+#wb-hud .hud-strong {
+  color: var(--wb-fg);
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  flex: 0 0 auto;
+}
+#wb-hud .hud-dim {
+  color: var(--wb-fg-dim);
+  font-variant-numeric: tabular-nums;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+#wb-hud .hud-purple { color: var(--vscode-charts-purple, #b48ef7); flex: 0 0 auto; }
+#wb-hud .hud-accent { color: var(--wb-accent); flex: 0 0 auto; }
+
+/* 上下文方块条（保留字符条形态，但更克制） */
+#wb-hud .hud-blocks {
+  letter-spacing: -1px;
+  color: var(--wb-ok);
+  font-family: var(--vscode-editor-font-family, Consolas, monospace);
+  flex: 0 0 auto;
+}
+#wb-hud .hud-blocks.warn { color: var(--wb-warn); }
+#wb-hud .hud-blocks.danger { color: var(--wb-bad); }
+
+#wb-hud .hud-ok, #wb-hud .hud-run, #wb-hud .hud-todo, #wb-hud .hud-purple {
+  overflow: hidden; text-overflow: ellipsis; max-width: 210px;
+}
+#wb-hud .hud-ok { color: var(--wb-ok); }
+#wb-hud .hud-run { color: var(--wb-warn); }
+#wb-hud .hud-todo { color: var(--wb-accent); }
+
+/* 按钮组：统一小圆角 + 悬停反馈 */
+#wb-hud .hud-btns { margin-left: auto; display: flex; align-items: center; gap: 2px; flex: 0 0 auto; }
+#wb-hud .hud-btn {
+  cursor: pointer;
+  color: var(--wb-fg-dim);
+  padding: 1px 7px;
+  border-radius: 5px;
+  font-size: 11px;
+  line-height: 15px;
+  font-weight: 500;
+  transition: background .12s, color .12s;
+}
+#wb-hud .hud-btn:hover {
+  color: var(--wb-fg);
+  background: var(--vscode-toolbar-hoverBackground, rgba(255, 255, 255, .09));
+}
+#wb-hud .hud-btn.on { color: var(--wb-accent); }
+#wb-hud .hud-btn.hud-icon { padding: 1px 5px; font-size: 12px; }
+
+/* 折叠后的小字 */
+#wb-hud .hud-mini { align-items: center; gap: 8px; min-height: 14px; height: 14px; font-size: 11px; }
+#wb-hud .hud-mini .hud-dim { color: var(--wb-fg-mute); }
+
+/* ---------- 侧栏卡片：内容自适应，不再纵向撑满 ---------- */
+#wb-hud-side {
+  align-self: flex-start;
+  margin: 10px;
+  padding: 0;
+  border-radius: var(--wb-r);
+  border: 1px solid var(--wb-line);
+  background: var(--vscode-sideBar-background, #0f141a);
+  box-shadow: 0 2px 10px rgba(0, 0, 0, .22);
+  font: 12px/1.55 var(--vscode-editor-font-family, "Microsoft YaHei UI", system-ui, sans-serif);
+  color: var(--wb-fg);
+  user-select: none;
+  display: flex;
+  flex-direction: column;
+  flex: 0 1 auto;
+  min-height: 0;
+  max-height: calc(100% - 24px);
+  overflow: hidden;
+}
+#wb-hud-side .hud-h {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 12px;
+  border-bottom: 1px solid var(--wb-line);
+  flex: 0 0 auto;
+}
+#wb-hud-side .hud-h-title {
+  color: var(--wb-fg);
+  font-weight: 600;
+  font-size: 12.5px;
+  letter-spacing: .2px;
+}
+#wb-hud-side .hud-h .hud-src {
+  margin-left: auto;
+  font-size: 10px;
+  color: var(--wb-fg-mute);
+  font-weight: 400;
+}
+#wb-hud-side .hud-scroll {
+  flex: 1 1 auto;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  padding: 0 0 4px;
+}
+#wb-hud-side .hud-scroll::-webkit-scrollbar { width: 4px; }
+#wb-hud-side .hud-scroll::-webkit-scrollbar-thumb { background: rgba(255, 255, 255, .14); border-radius: 2px; }
+
+/* 主角区：上下文占用 */
+#wb-hud-side .hud-hero { padding: 14px 14px 12px; }
+#wb-hud-side .hud-hero-top {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+}
+#wb-hud-side .hud-hero-k { font-size: 11.5px; color: var(--wb-fg-dim); }
+#wb-hud-side .hud-hero-pct {
+  font-size: 22px;
+  font-weight: 600;
+  line-height: 1;
+  letter-spacing: -.4px;
+  color: var(--wb-fg);
+  font-variant-numeric: tabular-nums;
+}
+#wb-hud-side .hud-hero-pct.warn { color: var(--wb-warn); }
+#wb-hud-side .hud-hero-pct.danger { color: var(--wb-bad); }
+#wb-hud-side .hud-meter {
+  margin-top: 10px;
+  height: 5px;
+  border-radius: 3px;
+  background: rgba(255, 255, 255, .08);
+  overflow: hidden;
+}
+#wb-hud-side .hud-meter-fill {
+  height: 100%;
+  border-radius: 3px;
+  background: var(--wb-accent);
+  transition: width .35s ease;
+}
+#wb-hud-side .hud-meter-fill.warn { background: var(--wb-warn); }
+#wb-hud-side .hud-meter-fill.danger { background: var(--wb-bad); }
+/* 会话切换器（点击「工作台」标题弹出）与锚定指示 —— 2026-11-21 */
+#wb-hud-side .hud-click { cursor: pointer; border-bottom: 1px dashed transparent; }
+#wb-hud-side .hud-click:hover { border-bottom-color: var(--wb-accent); }
+#wb-hud-side .hud-sesspick {
+  margin: 8px 0 0; padding: 4px; border: 1px solid var(--wb-border, rgba(128,128,128,.25));
+  border-radius: 8px; background: var(--vscode-sideBar-background, transparent);
+  max-height: 220px; overflow-y: auto;
+}
+#wb-hud-side .hud-sesspick::-webkit-scrollbar { width: 6px; }
+#wb-hud-side .hud-sesspick::-webkit-scrollbar-thumb { background: rgba(255,255,255,.14); border-radius: 3px; }
+#wb-hud-side .hud-sessitem {
+  display: flex; justify-content: space-between; gap: 8px; align-items: baseline;
+  padding: 4px 6px; border-radius: 6px; font-size: 11px; cursor: pointer;
+}
+#wb-hud-side .hud-sessitem:hover { background: var(--vscode-list-hoverBackground, rgba(128,128,128,.12)); }
+#wb-hud-side .hud-sessitem.cur { color: var(--wb-accent); }
+#wb-hud-side .hud-sessitem.cur::before { content: "• "; }
+#wb-hud-side .hud-sessname { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+#wb-hud-side .hud-sessval { flex: 0 0 auto; color: var(--wb-fg-mute); font-variant-numeric: tabular-nums; }
+#wb-hud-side .hud-sessempty { padding: 6px; font-size: 11px; color: var(--wb-fg-mute); }
+#wb-hud-side .hud-hero-sess {
+  margin-top: 4px; font-size: 10.5px; color: var(--wb-fg-mute);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+
+#wb-hud-side .hud-hero-sub {
+  margin-top: 8px;
+  font-size: 11px;
+  color: var(--wb-fg-mute);
+  font-variant-numeric: tabular-nums;
+}
+
+/* 次要列表：积分（标签左、数值右） */
+#wb-hud-side .hud-rows { padding: 2px 8px 8px; }
+#wb-hud-side .hud-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 5px 6px;
+  border-radius: 6px;
+}
+#wb-hud-side .hud-row:hover { background: var(--vscode-list-hoverBackground, rgba(255, 255, 255, .045)); }
+#wb-hud-side .hud-row-k {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  font-size: 11.5px;
+  color: var(--wb-fg-dim);
+  min-width: 0;
+}
+#wb-hud-side .hud-row-sub { font-size: 10px; color: var(--wb-fg-mute); }
+#wb-hud-side .hud-row-v {
+  margin-left: auto;
+  font-size: 12.5px;
+  font-weight: 600;
+  color: var(--wb-fg);
+  font-variant-numeric: tabular-nums;
+  flex: 0 0 auto;
+}
+#wb-hud-side .hud-row-v.accent { color: var(--wb-accent); }
+
+/* 分区标题：中文小字，不要全大写 + 字距 */
+#wb-hud-side .hud-sec {
+  padding: 10px 14px 4px;
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--wb-fg-mute);
+}
+
+/* 动态行（工具/子代理/待办） */
+#wb-hud-side .hud-act {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 14px;
+  font-size: 11.5px;
+}
+#wb-hud-side .hud-act:hover { background: var(--vscode-list-hoverBackground, rgba(255, 255, 255, .045)); }
+#wb-hud-side .hud-act-dot {
+  flex: 0 0 auto;
+  width: 6px; height: 6px;
+  border-radius: 50%;
+  background: rgba(255, 255, 255, .22);
+}
+#wb-hud-side .hud-act-dot.run {
+  background: var(--wb-warn);
+  box-shadow: 0 0 5px var(--wb-warn);
+  animation: wb-pulse 1.4s ease-in-out infinite;
+}
+@keyframes wb-pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: .35; }
+}
+#wb-hud-side .hud-act-dot.ok { background: var(--wb-ok); }
+#wb-hud-side .hud-act-dot.todo { background: var(--vscode-charts-purple, #b48ead); }
+#wb-hud-side .hud-act-name {
+  flex: 0 0 auto;
+  max-width: 88px;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  color: var(--wb-fg);
+  font-weight: 500;
+}
+#wb-hud-side .hud-act-detail {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  color: var(--wb-fg-dim);
+}
+#wb-hud-side .hud-act-count {
+  flex: 0 0 auto;
+  font-size: 10px;
+  color: var(--wb-fg-dim);
+  background: rgba(255, 255, 255, .07);
+  border-radius: 9px;
+  padding: 1px 7px;
+  font-variant-numeric: tabular-nums;
+}
+
+/* 标签：中性 chip，不再像按钮 */
+#wb-hud-side .hud-tags {
+  display: flex; flex-wrap: wrap; gap: 5px;
+  padding: 2px 14px 10px;
+}
+#wb-hud-side .hud-tag {
+  display: inline-block;
+  max-width: 100%;
+  padding: 2px 8px;
+  border-radius: 6px;
+  font-size: 10.5px;
+  color: var(--wb-fg-dim);
+  background: rgba(255, 255, 255, .05);
+  border: 1px solid transparent;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  cursor: default;
+}
+#wb-hud-side .hud-tag:hover { color: var(--wb-fg); background: rgba(255, 255, 255, .08); }
+
+#wb-hud-side .hud-more {
+  margin: 0; padding: 9px 12px 11px;
+  text-align: center;
+  cursor: pointer;
+  border-top: 1px solid var(--wb-line);
+  font-size: 11px;
+  color: var(--wb-fg-dim);
+  flex: 0 0 auto;
+  transition: color .12s, background .12s;
+}
+#wb-hud-side .hud-more:hover { color: var(--wb-accent); background: rgba(255, 255, 255, .03); }
+
+/* ---------- 抽屉（完整账本 / 设置） ---------- */
+#wb-hud-drawer {
+  position: fixed;
+  top: 52px; right: 14px;
+  width: 336px;
+  max-height: 74vh;
+  overflow-y: auto;
+  z-index: 99999;
+  box-sizing: border-box;
+  padding: 0;
+  border-radius: var(--wb-r);
+  border: 1px solid var(--wb-line);
+  background: var(--vscode-editorWidget-background, #1b2026);
+  box-shadow: 0 16px 40px rgba(0, 0, 0, .5);
+  font: 12px/1.6 var(--vscode-editor-font-family, "Microsoft YaHei UI", system-ui, sans-serif);
+  color: var(--wb-fg);
+  user-select: none;
+}
+#wb-hud-drawer .hud-dh {
+  display: flex; align-items: center; justify-content: space-between;
+  gap: 10px;
+  position: sticky; top: 0; z-index: 3;
+  padding: 11px 13px 10px;
+  background: var(--vscode-editorWidget-background, #1b2026);
+  border-bottom: 1px solid var(--wb-line);
+  font-weight: 600;
+  font-size: 12.5px;
+}
+#wb-hud-drawer::-webkit-scrollbar { width: 6px; }
+#wb-hud-drawer::-webkit-scrollbar-thumb { background: rgba(255, 255, 255, .16); border-radius: 3px; }
+#wb-hud-drawer::-webkit-scrollbar-track { background: transparent; }
+#wb-hud-drawer .hud-x { cursor: pointer; color: var(--wb-fg-dim); padding: 0 4px; font-size: 14px; }
+#wb-hud-drawer .hud-x:hover { color: var(--wb-fg); }
+#wb-hud-drawer .hud-note {
+  margin: 10px 13px 12px;
+  padding: 8px 10px;
+  font-size: 10.5px; line-height: 1.6;
+  color: var(--wb-fg-dim);
+  border: 1px solid var(--wb-line);
+  border-radius: 6px;
+  background: rgba(255, 255, 255, .03);
+  white-space: normal;
+}
+
+/* 行样式（侧栏与抽屉共用） */
+#wb-hud-drawer .hud-r {
+  display: flex; justify-content: space-between; gap: 10px;
+  padding: 4px 13px;
+  white-space: nowrap;
+  border-radius: 5px;
+}
+#wb-hud-drawer .hud-r:hover { background: var(--vscode-list-hoverBackground, rgba(255, 255, 255, .04)); }
+#wb-hud-drawer .hud-r .hud-k { color: var(--wb-fg-dim); overflow: hidden; text-overflow: ellipsis; }
+#wb-hud-drawer .hud-n {
+  color: var(--wb-fg);
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  flex: 0 0 auto;
+}
+#wb-hud-drawer .hud-sub {
+  margin: 9px 13px 7px;
+  font-size: 10.5px;
+  color: var(--wb-fg-mute);
+  letter-spacing: .2px;
+}
+
+/* 抽屉：逐段开关 / 导出按钮 / 结果提示 */
+#wb-hud-drawer .hud-cfg {
+  display: flex; flex-wrap: wrap; gap: 5px;
+  margin: 2px 13px 9px; padding-bottom: 9px;
+  border-bottom: 1px solid var(--wb-line);
+}
+#wb-hud-drawer .hud-chip {
+  padding: 2px 9px;
+  border-radius: 6px;
+  cursor: pointer;
+  font-size: 11px;
+  color: var(--wb-fg-dim);
+  border: 1px solid var(--wb-line);
+  white-space: nowrap;
+  transition: background .12s, color .12s, border-color .12s;
+}
+#wb-hud-drawer .hud-chip:hover { color: var(--wb-fg); background: rgba(255, 255, 255, .05); }
+#wb-hud-drawer .hud-chip.on {
+  color: var(--wb-accent);
+  border-color: rgba(76, 154, 255, .5);
+  background: rgba(76, 154, 255, .12);
+}
+#wb-hud-drawer .hud-btn {
+  display: inline-block;
+  font-size: 11.5px;
+  font-weight: 500;
+  padding: 4px 12px;
+  border-radius: 6px;
+  cursor: pointer;
+  border: 1px solid rgba(76, 154, 255, .45);
+  background: rgba(76, 154, 255, .14);
+  color: var(--wb-accent);
+  flex: 0 0 auto;
+  transition: background .12s, border-color .12s, transform .1s;
+}
+#wb-hud-drawer .hud-btn:hover {
+  background: rgba(76, 154, 255, .26);
+  border-color: var(--wb-accent);
+  transform: translateY(-1px);
+}
+#wb-hud-drawer .hud-btn:active { background: rgba(76, 154, 255, .36); transform: translateY(0); }
+#wb-hud-drawer .hud-hint {
+  margin: 8px 13px 12px;
+  padding: 6px 9px;
+  border-radius: 6px;
+  font-size: 10.5px; line-height: 1.55;
+  white-space: normal; word-break: break-all;
+  color: var(--wb-ok);
+  background: rgba(63, 185, 80, .1);
+  border: 1px solid rgba(63, 185, 80, .25);
+}
+
+/* 隐藏输入框右上角的吉祥物：120x120，z-index 12，正好压住状态条右端的按钮 */
+.wb-growth-buddy, .wb-growth-buddy__media { display: none !important; }
+
+/* 设置面板 */
+#wb-hud-drawer .hud-tabs {
+  display: flex; gap: 2px;
+  margin: 0 13px 9px;
+  border-bottom: 1px solid var(--wb-line);
+}
+#wb-hud-drawer .hud-tab {
+  padding: 7px 10px 6px;
+  cursor: pointer;
+  font-size: 11.5px;
+  color: var(--wb-fg-dim);
+  border-bottom: 2px solid transparent;
+}
+#wb-hud-drawer .hud-tab:hover { color: var(--wb-fg); }
+#wb-hud-drawer .hud-tab.on {
+  color: var(--wb-accent);
+  border-bottom-color: var(--wb-accent);
+  font-weight: 600;
+}
+#wb-hud-drawer .hud-num {
+  display: flex; align-items: center; gap: 6px;
+  margin: 4px 13px 4px 0;
+  font-size: 11.5px;
+  white-space: nowrap;
+}
+#wb-hud-drawer .hud-num input {
+  width: 64px; padding: 3px 7px;
+  border-radius: 6px;
+  border: 1px solid var(--wb-line);
+  background: rgba(255, 255, 255, .05);
+  color: inherit; font-size: 11.5px;
+}
+#wb-hud-drawer .hud-num select {
+  padding: 3px 6px;
+  border-radius: 6px;
+  border: 1px solid var(--wb-line);
+  background: rgba(255, 255, 255, .05);
+  color: inherit; font-size: 11.5px;
+}
+#wb-hud-drawer .hud-cfg .hud-sub { margin-top: 9px; }
+
+/* rightAlign：数字右对齐 */
+#wb-hud-drawer.hud-right .hud-n { margin-left: auto; text-align: right; }
+#wb-hud-drawer.hud-right .hud-k { flex: 0 1 auto; }
+
+/* 左停靠：占满会话区左侧空带 */
+#wb-hud-side.hud-dock-left {
+  position: absolute; left: 12px; top: 12px;
+  height: auto;
+  max-height: calc(100% - 24px);
+  margin: 0; z-index: 40;
+  box-shadow: 0 8px 28px rgba(0, 0, 0, .4);
+}
+
+/* @@ROUND_METER_CSS@@ */
+
+/* ===== 消息末尾消耗行 + 悬浮用量卡（v1）===== */
+.wb-round-strip {
+  display: inline-flex; align-items: center; gap: 10px;
+  margin: 8px 0 2px; padding: 3px 9px;
+  border-radius: 12px;
+  background: rgba(128,128,128,.10);
+  font-size: 11.5px; line-height: 1.5;
+  color: var(--wb-fg-mute, #999);
+  font-variant-numeric: tabular-nums;
+  user-select: none; cursor: default;
+  transition: background .15s ease;
+}
+.wb-round-strip:hover { background: rgba(128,128,128,.18); }
+.wb-round-strip .wb-rs-cost {
+  color: var(--wb-accent, #7aa2f7); font-weight: 600;
+}
+.wb-round-strip .wb-rs-usage { display: inline-flex; align-items: center; gap: 3px; }
+.wb-round-strip .wb-rs-ico { opacity: .75; }
+.wb-round-strip .wb-rs-model {
+  max-width: 180px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  opacity: .9;
+}
+.wb-round-strip .wb-rs-time { opacity: .7; }
+.wb-round-strip[data-approx="1"] { opacity: .82; }
+
+/* 悬浮卡 */
+#wb-round-card {
+  position: fixed; z-index: 2147483000;
+  width: 300px; padding: 10px 12px;
+  border-radius: 10px;
+  background: rgba(38,40,48,.97);
+  border: 1px solid rgba(255,255,255,.09);
+  box-shadow: 0 10px 30px rgba(0,0,0,.42);
+  color: #e6e6e6;
+  font-size: 12px; line-height: 1.7;
+  font-variant-numeric: tabular-nums;
+  backdrop-filter: blur(10px);
+  pointer-events: none;
+}
+#wb-round-card .wb-rc-head {
+  display: flex; align-items: center; gap: 6px;
+  padding-bottom: 7px; margin-bottom: 6px;
+  border-bottom: 1px solid rgba(255,255,255,.09);
+}
+#wb-round-card .wb-rc-ico { opacity: .8; }
+#wb-round-card .wb-rc-title { flex: 1; font-weight: 600; }
+#wb-round-card .wb-rc-total { color: #fff; font-weight: 600; }
+#wb-round-card .wb-rc-row { display: flex; justify-content: space-between; gap: 12px; }
+#wb-round-card .wb-rc-k { color: #9aa0aa; }
+#wb-round-card .wb-rc-v { color: #e6e6e6; }
+#wb-round-card .wb-rc-foot {
+  display: flex; justify-content: space-between; align-items: baseline;
+  margin-top: 7px; padding-top: 7px;
+  border-top: 1px solid rgba(255,255,255,.09);
+}
+#wb-round-card .wb-rc-cost { color: #7aa2f7; font-weight: 600; font-size: 13px; }
+
+/* 浅色主题适配 */
+body[data-theme="light"] #wb-round-card,
+.wb-light #wb-round-card {
+  background: rgba(252,252,252,.98); color: #222;
+  border-color: rgba(0,0,0,.10); box-shadow: 0 10px 30px rgba(0,0,0,.14);
+}
+body[data-theme="light"] #wb-round-card .wb-rc-k { color: #666; }
+body[data-theme="light"] #wb-round-card .wb-rc-v { color: #222; }
+body[data-theme="light"] #wb-round-card .wb-rc-total { color: #000; }
+body[data-theme="light"] #wb-round-card .wb-rc-cost { color: #2f6fdd; }
+
+/* @@END@@ */

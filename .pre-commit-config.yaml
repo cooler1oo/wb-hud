@@ -1,9 +1,28 @@
-# ① 提交前检查：每次 git commit 之前在你自己电脑上跑，几秒钟就完。
-# rev 换成最新版本，并和项目、CI 里的 ruff 版本对齐；新版里 id: ruff 改叫 ruff-check。
+# ① 提交前检查：git commit 之前在你本机跑，几秒就完。防的是"明显不合规的东西被
+# 提交上来，等到 PR 上才发现"。
+#
+# rev 与 CI 里的 ruff 版本对齐；新版 ruff 里 id: ruff 改叫 ruff-check。
 repos:
   - repo: https://github.com/astral-sh/ruff-pre-commit
     rev: v0.6.9
     hooks:
       - id: ruff
         args: [--fix]
-      - id: ruff-format
+
+  # 下面两个是本项目特有的检查，用本地钩子跑（需要本机有 python 和 node）。
+  # 之所以放这里而不是只在 CI 跑：这两个问题都属于"改完立刻就能发现"，
+  # 等 CI 回来才知道要多等几分钟。
+  - repo: local
+    hooks:
+      - id: billing-sync
+        name: 计费规则已同步（billing.json → billing_core.js → main_addon.js）
+        entry: python tools/sync_billing.py --check
+        language: system
+        pass_filenames: false
+        files: ^(tools/billing\.json|ui/billing_core\.js|ui/main_addon\.js|tools/sync_billing\.py)$
+
+      - id: js-syntax
+        name: 前端脚本语法（node --check）
+        entry: node --check
+        language: system
+        files: ^ui/.*\.js$

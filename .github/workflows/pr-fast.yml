@@ -1,4 +1,4 @@
-# ② 开 PR 时：先查规矩，再只跑和这次改动相关的测试。要快。
+# ② 开 PR 时：先查规矩，再只跑和这次改动相关的检查。要快。
 name: PR 快检查
 
 on:
@@ -9,19 +9,27 @@ jobs:
     # 攒批的 PR（batch/N）走「批次重检查」，这里跳过；两种做法可以并存
     if: ${{ !startsWith(github.head_ref, 'batch/') }}
     runs-on: ubuntu-latest
-    # 限时 5 分钟（建议值，可以调）。超时说明测试太慢：去优化测试，或者挪到 ③，不要加机器。
+    # 限时 5 分钟（建议值，可以调）。超时说明检查太慢：去优化，或者挪到 ③，不要加机器。
     timeout-minutes: 5
     steps:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0 # 要完整历史，才能算出这次改了哪些文件
+
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
-      - run: pip install -e ".[dev]" # 换成你项目的安装命令
+
+      # 本仓库不是可安装的包，只要 lint 工具本身
+      - run: pip install ruff
+
+      # node 用来做前端脚本的语法检查（ui/*.js 是直接内联进客户端的，没有构建步骤）
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
       - name: 规则检查（和 ① 一样，防止有人跳过本地钩子）
-        run: |
-          ruff check .
-          ruff format --check .
-      - name: 只跑和这次改动相关的测试
-        run: python scripts/related_tests.py "origin/${{ github.base_ref }}"
+        run: ruff check .
+
+      - name: 只跑和这次改动相关的检查
+        run: python scripts/related_checks.py "origin/${{ github.base_ref }}"

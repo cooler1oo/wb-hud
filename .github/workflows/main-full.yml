@@ -1,7 +1,7 @@
-# ③ 合进默认分支之后：把全部测试（包括慢测试）跑一遍。
+# ③ 合进默认分支之后：把全部检查跑一遍（没有 pytest 慢测试，这里是语法 + 31 项计费回归）。
 # 红了不回滚，直接再提交一个修复（往前修）。
 # 发布只从这里全绿的提交里挑。
-name: 主分支全量测试
+name: 主分支全量检查
 
 on:
   push:
@@ -12,9 +12,32 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5 # JS/TS 换成 actions/setup-node@v4 + npm ci
+
+      - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
-      - run: pip install -e ".[dev]" # 换成你项目的安装命令
-      - name: 全部测试（包括慢测试）
-        run: pytest # JS/TS：npx vitest run；Go：go test ./...
+
+      - run: pip install ruff
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: 规则检查
+        run: ruff check .
+
+      - name: Python 语法（全部脚本）
+        run: python -m py_compile tools/*.py ui/*.py
+
+      - name: 前端脚本语法
+        run: |
+          for f in ui/*.js; do node --check "$f"; done
+
+      - name: 计费规则已同步
+        run: python tools/sync_billing.py --check
+
+      # 31 项回归：分类 / 计价公式 / 会话单位跟随 / 脏时间戳 / 三处真源一致 /
+      # JS 与 Python 结论一致。需要读本机会话日志的那几项在没有日志时自动跳过，
+      # 所以在 CI 上也能跑，不会假绿也不会假红。
+      - name: 计费回归测试
+        run: python tools/test_billing.py
