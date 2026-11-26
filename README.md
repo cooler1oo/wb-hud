@@ -97,6 +97,20 @@ python tools/sync_billing.py        # billing_core.js → main_addon.js
 为什么要这么拆：AI 写代码时一天能出几十个 PR，每个都跑全量，CI 就排队、烧额度。
 ② 只跑「这次改到的部分」，③ 才做全量兜底。这套做法来自 [ai-era-ci](https://github.com/cooler1oo/ai-era-ci-template) 技能。
 
+## 本地怎么验（不用装客户端）
+
+改完代码先跑这四条，和 CI 跑的是同一套：
+
+```bash
+python -m py_compile tools/*.py ui/*.py      # Python 语法
+for f in ui/*.js; do node --check "$f"; done   # 前端脚本语法（没有构建步骤，只有这一步）
+python tools/sync_billing.py --check           # 计费规则是否已同步（改过规则没 sync 会红）
+python tools/test_billing.py                   # 31 项回归
+```
+
+`python tools/selftest.py` 是「体检」：插件文件齐不齐、库能不能读、客户端补丁状态是否一致、备份在不在。
+它只读，不改任何东西。
+
 ## 已知限制
 
 - **只在 Windows 上验证过**：注入逻辑基于 asar 结构与 exe 内哈希，macOS/Linux 版本没试。
