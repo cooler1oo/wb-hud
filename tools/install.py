@@ -186,9 +186,17 @@ def main():
     kill()
     try:
         log("[2/5] 备份 exe 与 asar")
-        refreshed = patch.backup()
-        if refreshed:
+        reason = patch.backup()
+        # 按真实原因写日志：之前用布尔值一律写成"检测到客户端升级过"，
+        # 而 2026-11-26 实际是"备份丢失、从已注入的 asar 反推重建"，日志与事实不符。
+        if reason == "upgraded":
             log("      备份已刷新（检测到客户端升级过）")
+        elif reason == "derived":
+            log("      备份缺失，已从当前 asar 反推重建干净版（移除三处注入）")
+        elif reason == "copied":
+            log("      备份缺失，当前 asar 本就干净，已直接复制为备份")
+        else:
+            log("      备份有效，无需刷新")
         log("[3/5] 生成补丁并同步 exe 哈希")
         h, report, cnt = patch.install()
         for p, o, n in report:

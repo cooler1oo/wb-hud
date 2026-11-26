@@ -105,7 +105,12 @@ def check_patch():
         add("客户端可执行文件存在", os.path.isfile(patch.EXE), patch.EXE)
         has_bak = os.path.isfile(patch.ASAR_BAK) and os.path.isfile(patch.EXE_BAK)
         if has_bak:
-            add("原始备份存在", True, "asar/exe 备份都在")
+            # 备份是"反推重建"的（不是客户端原版文件本身）就如实说明，
+            # 免得日后排查时误以为手里有厂商原始文件。
+            note = "asar/exe 备份都在"
+            if os.path.isfile(patch.ASAR_BAK + ".derived"):
+                note += "（asar 备份由已注入版本反推重建）"
+            add("原始备份存在", True, note)
         elif os.path.isfile(patch.ASAR) and patch.is_patched(patch.ASAR):
             # 备份缺失但当前 asar 已注入：不是死局。注入是纯插入，可按标记反推。
             # 安装时会自动重建（patch.derive_backup），这里给 warn + 明确入口。

@@ -333,7 +333,12 @@ def backup():
     改动（2026-11-21 修正）：旧实现只看 stamp 指纹，而 stamp 从未被写过，
     于是「当前 asar 已注入」时会被当成原版复制进 ASAR_BAK，污染备份。
 
-    返回 True 表示刷新了备份。
+    返回「刷新原因」（字符串，空 = 备份本来就有效）：
+      "upgraded" 客户端升级过，用当前干净版刷新了备份
+      "derived"  备份丢失，从当前「已注入」的 asar 反推重建了干净版
+      "copied"   备份丢失且当前 asar 本来就干净，直接复制
+    调用方据此写日志——不要再用一个布尔去猜原因，2026-11-26 就因为
+    True 被统一写成「检测到客户端升级过」，而实际是反推重建（日志与事实不符）。
     """
     if not os.path.exists(ASAR):
         raise FileNotFoundError("找不到 %s" % ASAR)
@@ -353,10 +358,10 @@ def backup():
             shutil.copy2(ASAR, ASAR_BAK)
             shutil.copy2(EXE, EXE_BAK)   # exe 也要一起刷新，否则 restore 会降级
             _write_stamp(stamp, bak_fp)
-            return True
+            return "upgraded"
         # 备份有效
         _write_stamp(stamp, bak_fp)
-        return False
+        return ""
 
     # 备份缺失或不干净
     if cur_patched:
@@ -364,12 +369,12 @@ def backup():
         # 用户清理、换机器而消失，而注入是纯插入/追加——完全可以从当前 asar
         # 反推出干净版。反推失败才拒绝（见 strip_asar 的复核）。
         derive_backup()
-        return True
+        return "derived"
 
     shutil.copy2(ASAR, ASAR_BAK)
     shutil.copy2(EXE, EXE_BAK)
     _write_stamp(stamp, cur)
-    return True
+    return "copied"
 
 
 def _write_stamp(path, value):
