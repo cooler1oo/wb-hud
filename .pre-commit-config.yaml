@@ -1,0 +1,9 @@
+# ① 提交前检查：每次 git commit 之前在你自己电脑上跑，几秒钟就完。
+# rev 换成最新版本，并和项目、CI 里的 ruff 版本对齐；新版里 id: ruff 改叫 ruff-check。
+repos:
+  - repo: https://github.com/astral-sh/ruff-pre-commit
+    rev: v0.6.9
+    hooks:
+      - id: ruff
+        args: [--fix]
+      - id: ruff-format

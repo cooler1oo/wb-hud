@@ -1,0 +1,20 @@
+# ③ 合进默认分支之后：把全部测试（包括慢测试）跑一遍。
+# 红了不回滚，直接再提交一个修复（往前修）。
+# 发布只从这里全绿的提交里挑。
+name: 主分支全量测试
+
+on:
+  push:
+    branches: [main] # 默认分支不叫 main 的，换成实际的名字
+
+jobs:
+  full:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5 # JS/TS 换成 actions/setup-node@v4 + npm ci
+        with:
+          python-version: "3.12"
+      - run: pip install -e ".[dev]" # 换成你项目的安装命令
+      - name: 全部测试（包括慢测试）
+        run: pytest # JS/TS：npx vitest run；Go：go test ./...

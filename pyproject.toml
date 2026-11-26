@@ -1,0 +1,29 @@
+[project]
+name = "app"
+version = "0.1.0"
+description = "从这里开始写你的项目"
+requires-python = ">=3.10"
+
+# CI 里那句 `pip install -e ".[dev]"` 装的就是这一组。
+# 少了它，workflow 装完依赖仍然没有 pytest / ruff，第二步会报 No module named pytest。
+[project.optional-dependencies]
+dev = ["pytest>=8", "ruff>=0.6"]
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools]
+packages = ["app"]
+
+[tool.pytest.ini_options]
+pythonpath = ["."]
+testpaths = ["tests"]
+markers = ["slow: 慢测试，PR 上不跑，留到合进 main 之后跑"]
+
+[tool.ruff]
+line-length = 88
+
+# 钉住经典规则集合。新版 ruff 的默认规则变多，不钉的话模板脚本自己会先报错。
+[tool.ruff.lint]
+select = ["E4", "E7", "E9", "F"]
