@@ -8,7 +8,9 @@ import time
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, os.path.join(HERE, "..", "ui"))
+sys.path.insert(0, HERE)
 import patch
+import _proc
 
 EXE = patch.EXE
 LOG = os.path.join(HERE, "install.log")
@@ -127,6 +129,31 @@ def spawn_detached(argv=None):
         return False
 
 
+def sync_rules(log):
+    """同步计费规则。返回 True 表示可以继续安装。
+
+    这一步只读、不改客户端，所以放最前面：失败时客户端还活着，不会被关掉。
+    子进程调用走 _proc（强制 UTF-8），否则 GBK 代码页下会把 node 的 UTF-8
+    输出解码失败，让"已经成功"的同步被判成失败——2026-11-26 实际踩过。
+    """
+    try:
+        rc, out, err = _proc.run_text(
+            [sys.executable, os.path.join(HERE, "sync_billing.py")], timeout=90)
+    except Exception as e:
+        log("[!] 计费规则同步异常：%s，中止安装（客户端未改动）" % e)
+        return False
+    for ln in out.splitlines():
+        if ln.strip():
+            log("      " + ln.strip())
+    if rc != 0:
+        log("[!] 计费规则同步失败（退出码 %s），中止安装（客户端未改动）" % rc)
+        for ln in err.splitlines()[:12]:
+            if ln.strip():
+                log("      " + ln.strip())
+        return False
+    return True
+
+
 def main():
     # 2026-11-21 修正：不再自动派生脱离进程。
     # 原先派生后台进程，是因为 kill() 用了 /T（连带杀整棵子树）。现在 kill()
@@ -153,24 +180,9 @@ def main():
     if delay:
         log("等待 %d 秒后开始（让当前窗口把消息发完）…" % delay)
         time.sleep(delay)
-    log("[1/5] 关闭客户端")
-    # 关客户端之前先确认计费规则已同步：这一步只读不改客户端，
-    # 失败时要趁客户端还活着就中止，不要留下"关了又没装上"的状态。
-    try:
-        r = subprocess.run([sys.executable, os.path.join(HERE, "sync_billing.py")],
-                           capture_output=True, text=True, timeout=60)
-        for ln in (r.stdout or "").splitlines():
-            if ln.strip():
-                log("      " + ln.strip())
-        if r.returncode != 0:
-            log("[!] 计费规则同步失败，中止安装（客户端未改动）")
-            for ln in (r.stderr or "").splitlines()[:6]:
-                log("      " + ln.strip())
-            return
-    except Exception as e:
-        log("[!] 计费规则同步异常：%s，中止安装（客户端未改动）" % e)
+    log("[1/5] 同步计费规则并关闭客户端")
+    if not sync_rules(log):
         return
-
     kill()
     try:
         log("[2/5] 备份 exe 与 asar")

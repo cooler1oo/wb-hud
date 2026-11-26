@@ -11,10 +11,11 @@
 import argparse
 import json
 import os
-import subprocess
 import sys
 
 HERE = os.path.dirname(os.path.abspath(__file__))
+sys.path.insert(0, HERE)
+import _proc  # noqa: E402
 PLUGIN = os.path.dirname(HERE)
 sys.path.insert(0, os.path.join(PLUGIN, "ui"))
 try:
@@ -47,6 +48,7 @@ def check_assets():
     need = ["ui/inject.js", "ui/inject.css", "ui/main_addon.js", "ui/preload_addon.js",
             "ui/patch.py", "ui/billing_core.js", "tools/billing.json",
             "tools/query.py", "tools/install.py", "tools/uninstall.py",
+            "tools/_proc.py",
             "tools/sync_billing.py", "tools/test_billing.py", "tools/repair_backup.py"]
     miss = [n for n in need if not os.path.isfile(os.path.join(PLUGIN, n))]
     add("运行所需文件齐全", not miss, "缺失：%s" % miss if miss else "%d 个文件齐全" % len(need))
@@ -74,8 +76,7 @@ def check_db():
 
 def check_query():
     try:
-        r = subprocess.run([PY, os.path.join(HERE, "query.py")], capture_output=True,
-                           text=True, timeout=30)
+        r = _proc.run([PY, os.path.join(HERE, "query.py")], timeout=30)
         d = json.loads(r.stdout)
         if d.get("error"):
             add("query.py 可运行", False, d["error"])
@@ -124,7 +125,7 @@ def check_billing():
     漂移的后果不是报错，而是"界面说积分、CLI 说费用"这类静默错误。"""
     p = os.path.join(HERE, "sync_billing.py")
     try:
-        r = subprocess.run([PY, p, "--check"], capture_output=True, text=True, timeout=60)
+        r = _proc.run([PY, p, "--check"], timeout=60)
         add("计费规则已同步", r.returncode == 0,
             (r.stdout or r.stderr).strip().splitlines()[-1][:120] if (r.stdout or r.stderr) else "")
     except Exception as e:

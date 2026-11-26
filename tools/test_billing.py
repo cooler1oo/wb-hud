@@ -21,17 +21,20 @@
 用法：python tools/test_billing.py [-v]
 退出码 0 = 全过。
 """
+import ast
 import datetime
 import glob
 import importlib.util
 import json
 import os
-import subprocess
 import sys
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 PLUGIN = os.path.dirname(HERE)
 UI = os.path.join(PLUGIN, "ui")
+
+sys.path.insert(0, HERE)
+import _proc  # noqa: E402
 
 _spec = importlib.util.spec_from_file_location("wb_query", os.path.join(HERE, "query.py"))
 Q = importlib.util.module_from_spec(_spec)
@@ -127,15 +130,14 @@ def test_sync_consistency():
 
     check("main_addon.js 内联块与 billing_core.js 一致", norm(inlined) == norm(core))
 
-    r = subprocess.run([sys.executable, os.path.join(HERE, "sync_billing.py"), "--check"],
-                       capture_output=True, text=True)
+    r = _proc.run([sys.executable, os.path.join(HERE, "sync_billing.py"), "--check"])
     check("sync_billing.py --check 通过", r.returncode == 0, (r.stdout or r.stderr).strip()[:120])
 
 
 def test_js_parity():
     """把同一批用例交给 Node 跑一遍 billing_core.js：JS 与 Python 结论必须一致。"""
     try:
-        node = subprocess.run(["node", "--version"], capture_output=True, text=True)
+        node = _proc.run(["node", "--version"])
         if node.returncode != 0:
             raise FileNotFoundError
     except FileNotFoundError:
@@ -153,8 +155,7 @@ def test_js_parity():
              ["deepseek-v4.1-flash"],
              ["custom-local:glm-5.3-flash"],
              ["glm-5.3-flash"]]
-    r = subprocess.run(["node", "-e", code, os.path.join(UI, "billing_core.js"), json.dumps(cases)],
-                       capture_output=True, text=True)
+    r = _proc.run(["node", "-e", code, os.path.join(UI, "billing_core.js"), json.dumps(cases)])
     if r.returncode != 0:
         check("Node 能加载 billing_core.js", False, r.stderr.strip()[:200])
         return
@@ -241,7 +242,7 @@ def test_real_logs():
 def test_session_rule():
     """单位跟随规则：混合会话的 unit 必须等于最后一次请求的单位（JS 真实代码）。"""
     try:
-        if subprocess.run(["node", "--version"], capture_output=True, text=True).returncode != 0:
+        if _proc.run(["node", "--version"]).returncode != 0:
             raise FileNotFoundError
     except FileNotFoundError:
         print("  [!] 未安装 node，跳过会话规则测试")
@@ -265,8 +266,7 @@ def test_session_rule():
         "'01a2181c5c82701fa39452266f3e1fea':'deepseek-v4.1-flash'},c);"
         "console.log(JSON.stringify([a,b,d3]));"
     )
-    r = subprocess.run(["node", "-e", code, os.path.join(UI, "billing_core.js")],
-                       capture_output=True, text=True)
+    r = _proc.run(["node", "-e", code, os.path.join(UI, "billing_core.js")])
     if r.returncode != 0:
         check("会话规则：Node 执行成功", False, r.stderr.strip()[:200])
         return
@@ -277,11 +277,48 @@ def test_session_rule():
     check("脏请求 ID 不干扰「最近一次」判定", d3["unit"] == "credit", str(d3["unit"]))
 
 
+def test_subprocess_contract():
+    """所有子进程调用必须走 _proc（统一 UTF-8 契约）。
+
+    防的是 2026-11-26 那次真实事故：系统代码页 936 时，`text=True` 用 GBK 解码
+    node 的 UTF-8 输出，读线程抛 UnicodeDecodeError，同步脚本虽然已经写盘成功
+    却以非 0 退出，安装被误判为「计费规则同步失败」直接中止。
+    这类错误不会在 UTF-8 环境（CI / 大多数开发机）复现，所以必须靠静态约定兜住。
+    """
+    bad = []
+    for path in sorted(glob.glob(os.path.join(PLUGIN, "tools", "*.py"))
+                       + glob.glob(os.path.join(PLUGIN, "ui", "*.py"))):
+        if os.path.basename(path) == "_proc.py":
+            continue
+        try:
+            src = open(path, encoding="utf-8").read()
+            tree = ast.parse(src, path)
+        except (OSError, SyntaxError):
+            continue
+        # 用 AST 而不是字符串匹配：否则本函数自己的说明文字和检查语句都会被误判
+        for node in ast.walk(tree):
+            if not isinstance(node, ast.Call):
+                continue
+            name = getattr(node.func, "attr", None) or getattr(node.func, "id", None)
+            if name != "run":
+                continue
+            for kw in node.keywords:
+                if kw.arg == "text":
+                    bad.append("%s:%d" % (os.path.basename(path), node.lineno))
+    check("子进程统一走 _proc（无裸 text=True）", not bad, "、".join(bad[:5]))
+
+    # _proc 本身必须钉住两端：子进程 UTF-8 输出、父进程 UTF-8 解码
+    core = open(os.path.join(PLUGIN, "tools", "_proc.py"), encoding="utf-8").read()
+    check("_proc 强制子进程 UTF-8 输出", "PYTHONIOENCODING" in core and "PYTHONUTF8" in core)
+    check("_proc 强制 UTF-8 解码并容错", 'encoding="utf-8"' in core and "errors" in core)
+
+
 def main():
     print("计费规则回归测试")
     print("-" * 60)
     for fn in (test_classification, test_price_book, test_fee_math, test_dirty_timestamps,
-               test_session_rule, test_sync_consistency, test_js_parity, test_real_logs):
+               test_session_rule, test_sync_consistency, test_js_parity, test_real_logs,
+               test_subprocess_contract):
         print("[%s]" % fn.__name__.replace("test_", ""))
         fn()
     bad = [c for c in checks if not c[1]]

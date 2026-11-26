@@ -26,11 +26,13 @@ import json
 import os
 import shutil
 import sqlite3
-import subprocess
+import sys
 
 DB = os.path.join(os.path.expanduser("~"), ".workbuddy", "workbuddy.db")
 PROJECTS = os.path.join(os.path.expanduser("~"), ".workbuddy", "projects")
 CACHE = os.path.join(os.path.dirname(os.path.abspath(__file__)), ".modelmap.json")
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import _proc  # noqa: E402
 BILLING_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "billing.json")
 TOP_SESSIONS = 8
 
@@ -275,10 +277,10 @@ def git_info(cwd):
         return out
     out["available"] = True
     try:
-        out["branch"] = subprocess.run(["git", "rev-parse", "--abbrev-ref", "HEAD"], cwd=cwd,
-                                      capture_output=True, text=True, timeout=2).stdout.strip()
-        out["dirty"] = bool(subprocess.run(["git", "status", "--porcelain"], cwd=cwd,
-                                          capture_output=True, text=True, timeout=2).stdout.strip())
+        out["branch"] = _proc.run(["git", "rev-parse", "--abbrev-ref", "HEAD"],
+                                  cwd=cwd, timeout=2).stdout.strip()
+        out["dirty"] = bool(_proc.run(["git", "status", "--porcelain"],
+                                      cwd=cwd, timeout=2).stdout.strip())
     except Exception:
         pass
     return out

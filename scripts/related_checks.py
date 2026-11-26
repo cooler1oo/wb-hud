@@ -19,6 +19,8 @@ import sys
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(HERE)
+sys.path.insert(0, os.path.join(ROOT, "tools"))
+import _proc  # noqa: E402  （统一 UTF-8 子进程契约，见 tools/_proc.py）
 
 # 这些文件一动，计费口径就可能漂移，必须跑 31 项回归
 BILLING_FILES = {
@@ -47,8 +49,7 @@ def changed_files(base):
     for ref in (base, "origin/HEAD", "HEAD~1"):
         if not ref:
             continue
-        r = subprocess.run(["git", "diff", "--name-only", "%s...HEAD" % ref],
-                           cwd=ROOT, capture_output=True, text=True)
+        r = _proc.run(["git", "diff", "--name-only", "%s...HEAD" % ref], cwd=ROOT)
         if r.returncode == 0:
             files = [ln.strip().replace("\\", "/") for ln in r.stdout.splitlines() if ln.strip()]
             print("[info] 基线 %s，改动 %d 个文件" % (ref, len(files)), flush=True)

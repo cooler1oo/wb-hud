@@ -20,10 +20,11 @@ import argparse
 import json
 import os
 import re
-import subprocess
 import sys
 
 HERE = os.path.dirname(os.path.abspath(__file__))
+sys.path.insert(0, HERE)
+import _proc  # noqa: E402
 PLUGIN = os.path.dirname(HERE)
 UI = os.path.join(PLUGIN, "ui")
 BILLING_JSON = os.path.join(HERE, "billing.json")
@@ -118,7 +119,10 @@ def main():
 
     # 3) 用 Node 跑一次真实分类，确认内联后的逻辑真的能加载（语法错/对象写坏会立刻暴露）
     try:
-        r = subprocess.run(
+        # 走 _proc：node 输出是 UTF-8，而系统代码页可能是 GBK。
+        # 2026-11-26 实测：不指定 encoding 时读线程抛 UnicodeDecodeError，
+        # 同步明明已写盘成功却被判失败，安装直接中止。
+        rc, out, err = _proc.run_text(
             ["node", "-e",
              "const fs=require('fs');const src=fs.readFileSync(process.argv[1],'utf8');"
              "const B=new Function(src+';return WBBilling;')();"
@@ -129,12 +133,12 @@ def main():
              "for(const [m,want] of cases){const got=B.unitOf(m,c);"
              "if(got!==want){console.error('分类错误 '+m+' => '+got+' 期望 '+want);process.exit(1);}}"
              "console.log('[ok] Node 加载校验通过：'+cases.length+' 个分类用例全部正确');",
-             CORE_JS],
-            capture_output=True, text=True)
-        sys.stdout.write(r.stdout)
-        if r.returncode != 0:
-            sys.stderr.write(r.stderr)
-            fail("Node 校验失败（billing_core.js 语法或规则有问题）")
+             CORE_JS], timeout=60)
+        sys.stdout.write(out)
+        if rc != 0:
+            sys.stderr.write(err)
+            fail("Node 校验失败（退出码 %s）：billing_core.js 语法或规则有问题，"
+                 "这版不能安装" % rc)
     except FileNotFoundError:
         print("[!] 未找到 node，跳过运行时校验（不影响安装）")
 
