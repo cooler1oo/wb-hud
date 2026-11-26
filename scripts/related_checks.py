@@ -35,10 +35,10 @@ CI_FILES = (".github/", "scripts/", "pyproject.toml", ".pre-commit-config.yaml")
 
 def sh(cmd):
     """跑一条命令，失败立即返回 False 并打印原文（不吞错误）。"""
-    print("[run] " + " ".join(cmd))
+    print("[run] " + " ".join(cmd), flush=True)
     r = subprocess.run(cmd, cwd=ROOT)
     if r.returncode != 0:
-        print("[x] 失败：%s（退出码 %d）" % (" ".join(cmd), r.returncode))
+        print("[x] 失败：%s（退出码 %d）" % (" ".join(cmd), r.returncode), flush=True)
         return False
     return True
 
@@ -51,9 +51,9 @@ def changed_files(base):
                            cwd=ROOT, capture_output=True, text=True)
         if r.returncode == 0:
             files = [ln.strip().replace("\\", "/") for ln in r.stdout.splitlines() if ln.strip()]
-            print("[info] 基线 %s，改动 %d 个文件" % (ref, len(files)))
+            print("[info] 基线 %s，改动 %d 个文件" % (ref, len(files)), flush=True)
             return files
-    print("[!] 算不出改动范围（浅克隆或没有基线），按全量跑")
+    print("[!] 算不出改动范围（浅克隆或没有基线），按全量跑", flush=True)
     return None
 
 
@@ -72,7 +72,7 @@ def main():
     ok &= sh([sys.executable, "tools/sync_billing.py", "--check"])
 
     if full or any(f.startswith(CI_FILES) for f in files):
-        print("[info] 改动涉及 CI 或全量模式 → 跑全部检查")
+        print("[info] 改动涉及 CI 或全量模式 → 跑全部检查", flush=True)
         ok &= sh([sys.executable, "-m", "py_compile"] + sorted(
             os.path.join("tools", f) for f in os.listdir(os.path.join(ROOT, "tools")) if f.endswith(".py"))
             + [os.path.join("ui", "patch.py")])
@@ -87,7 +87,7 @@ def main():
     need_billing = any(f in BILLING_FILES for f in files)
 
     if not (js or py or need_billing):
-        print("[ok] 只改了文档/配置，不需要跑测试")
+        print("[ok] 只改了文档/配置，不需要跑测试", flush=True)
         return 0 if ok else 1
 
     for f in py:
@@ -97,7 +97,7 @@ def main():
     if need_billing:
         ok &= sh([sys.executable, os.path.join("tools", "test_billing.py")])
 
-    print("[ok] 相关检查完成" if ok else "[x] 有检查未通过")
+    print("[ok] 相关检查完成" if ok else "[x] 有检查未通过", flush=True)
     return 0 if ok else 1
 
 
