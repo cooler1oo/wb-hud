@@ -275,10 +275,12 @@
      * 旧实现只扫主文件，账本于是显示 8M、费用只算到 ¥0.76（实际 ¥3.53）。
      * 目录约定：<projects>/<项目目录>/<会话ID>/subagents/agent-*.jsonl
      * 这里把「主文件 + 子代理文件」当成同一个会话的数据源，逐文件维护扫描游标。 */
-    var SUBMAP = { at: 0, sid: '', files: null };
+    var SUBMAP = {};             // sid -> { at, files }
+    var SUBCACHE_MAX = 400;      // 防止长期运行后无限增长
     function subFiles(sid) {
       var now = Date.now();
-      if (SUBMAP.files && SUBMAP.sid === sid && now - SUBMAP.at < 5000) return SUBMAP.files;
+      var hit = SUBMAP[sid];
+      if (hit && now - hit.at < 5000) return hit.files;
       var out = [];
       try {
         var main = fileMap()[sid];
@@ -290,7 +292,13 @@
           }
         }
       } catch (e) { /* 没有子代理目录是常态 */ }
-      SUBMAP = { at: now, sid: sid, files: out };
+      // 必须按会话缓存：payload 会遍历几百上千个会话，
+      // 单条缓存会让每轮都重新 readdir 一遍，1s 轮询直接变慢。
+      SUBMAP[sid] = { at: now, files: out };
+      var keys = Object.keys(SUBMAP);
+      if (keys.length > SUBCACHE_MAX) {
+        for (var k = 0; k < keys.length - SUBCACHE_MAX / 2; k++) delete SUBMAP[keys[k]];
+      }
       return out;
     }
 
