@@ -182,6 +182,10 @@
     var HSCAN = {};   // file -> {offset, partial}
     // 扫描结果持久化：106MB JSONL 全扫一遍很贵，重启后不能从零再来。
     // 存到插件目录的 .hist.json（只存聚合值，不含原文），按 offset 继续增量。
+    // 版本号：聚合口径变更就递增，旧缓存自动作废并重扫。
+    // v4（2026-11-28）：开始把 <会话ID>/subagents/*.jsonl 计入同一会话，
+    // 旧缓存的数字本来就漏了子代理，继续用会"新代码 + 旧错数"。
+    var CACHE_VER = 4;
     (function loadHistCache() {
       try {
         var fs2 = require('node:fs');
@@ -191,10 +195,14 @@
         for (var ci = 0; ci < cands.length; ci++) {
           if (!fs2.existsSync(cands[ci])) continue;
           var j = JSON.parse(fs2.readFileSync(cands[ci], 'utf8'));
-          // 版本号：缓存口径变更时递增，旧缓存自动作废（否则会拿错口径的旧数据算钱）
-          var CACHE_VER = 3;
           if (j && j.hist && j.ver === CACHE_VER) {
-            HIST = j.hist;
+            // 逐条补齐字段：缓存可能是"同版本但更早写入"的，缺字段会让 += 抛错
+            HIST = {};
+            for (var hk in j.hist) {
+              var e = j.hist[hk];
+              if (!e.sub) e.sub = { input: 0, output: 0, requests: 0 };
+              HIST[hk] = e;
+            }
             HSCAN = {};
             var src = j.hscan || {};
             for (var sk in src) HSCAN[_fkey(sk)] = src[sk];   // 载入即标准化
@@ -216,7 +224,7 @@
         var p3 = path.join(process.env.USERPROFILE || '', '.workbuddy', 'plugins', 'marketplaces', 'workbench-local', 'workbench-hud', 'tools', '.hist.json');
         var hs = {};
         for (var hk in HSCAN) hs[_fkey(hk)] = HSCAN[hk];
-        fs3.writeFileSync(p3, JSON.stringify({ ver: 3, at: Date.now(), hist: HIST, hscan: hs }));
+        fs3.writeFileSync(p3, JSON.stringify({ ver: CACHE_VER, at: Date.now(), hist: HIST, hscan: hs }));
         histDirty = false; histSavedAt = Date.now();
       } catch (e) { }
     }
@@ -262,36 +270,92 @@
       return String(p || '').replace(/\\/g, '/');
     }
 
-    function histOf(sid, file) {
-      var h = HIST[sid] || (HIST[sid] = {
+    /* ===== 会话日志的「一个会话可能多份文件」模型 =====
+     * 实测（2026-11-28）：某会话主文件 input 7.98M，子代理另有 25.06M，
+     * 旧实现只扫主文件，账本于是显示 8M、费用只算到 ¥0.76（实际 ¥3.53）。
+     * 目录约定：<projects>/<项目目录>/<会话ID>/subagents/agent-*.jsonl
+     * 这里把「主文件 + 子代理文件」当成同一个会话的数据源，逐文件维护扫描游标。 */
+    var SUBMAP = { at: 0, sid: '', files: null };
+    function subFiles(sid) {
+      var now = Date.now();
+      if (SUBMAP.files && SUBMAP.sid === sid && now - SUBMAP.at < 5000) return SUBMAP.files;
+      var out = [];
+      try {
+        var main = fileMap()[sid];
+        if (main) {
+          var dir = path.join(path.dirname(main), sid, 'subagents');
+          var ls = fs.readdirSync(dir);
+          for (var i = 0; i < ls.length; i++) {
+            if (ls[i].slice(-6) === '.jsonl') out.push(path.join(dir, ls[i]));
+          }
+        }
+      } catch (e) { /* 没有子代理目录是常态 */ }
+      SUBMAP = { at: now, sid: sid, files: out };
+      return out;
+    }
+
+    function newHist() {
+      return {
         input: 0, output: 0, cacheRead: 0, cacheCreate: 0,
         requests: 0, models: {}, first: 0, last: 0, compactions: 0,
-        reqModels: {}, reqUsage: {}
-      });
+        reqModels: {}, reqUsage: {}, subFiles: 0,
+        sub: { input: 0, output: 0, requests: 0 },
+        // 主线程最近一次请求：账本的"当前单位"只跟它走。
+        // 子代理可能用另一套模型，让它带偏单位会显示错误的计费方式。
+        lastMainAt: 0, lastMainModel: ''
+      };
+    }
+
+    // 截断/重写后必须把「本会话所有文件」一起重扫：只清一个文件会把其它文件的贡献丢掉
+    function rebuildHist(h, sid) {
+      h.input = h.output = h.cacheRead = h.cacheCreate = h.requests = 0;
+      h.models = {}; h.first = h.last = 0; h.compactions = 0;
+      h.reqModels = {}; h.reqUsage = {}; h._doneKeys = {};
+      h.sub = { input: 0, output: 0, requests: 0 };
+      h.lastMainAt = 0; h.lastMainModel = '';
+      var files = [fileMap()[sid]].concat(subFiles(sid));
+      for (var i = 0; i < files.length; i++) {
+        if (!files[i]) continue;
+        HSCAN[_fkey(files[i])] = { offset: 0, partial: '' };
+      }
+    }
+
+    function histOf(sid, file) {
+      var h = HIST[sid] || (HIST[sid] = newHist());
       if (!file) return h;
+      var subs = subFiles(sid);
+      h.subFiles = subs.length;
+      var rescan = scanHistFile(h, sid, file, false);
+      for (var i = 0; i < subs.length; i++) {
+        if (scanHistFile(h, sid, subs[i], true) === 'rebuild') rescan = 'rebuild';
+      }
+      if (rescan === 'rebuild') {
+        rebuildHist(h, sid);
+        scanHistFile(h, sid, file, false);
+        for (var j = 0; j < subs.length; j++) scanHistFile(h, sid, subs[j], true);
+      }
+      return h;
+    }
+
+    function scanHistFile(h, sid, file, isSub) {
       var fk = _fkey(file);
       var sc = HSCAN[fk] || (HSCAN[fk] = { offset: 0, partial: '' });
       var size;
-      try { size = fs.statSync(file).size; } catch (e) { return h; }
+      try { size = fs.statSync(file).size; } catch (e) { return ''; }
       // 防御：缓存里已有累积值、但 offset 却是 0（键格式不一致等历史原因），
       // 直接认定该文件已处理完，避免再累加一遍（否则费用翻倍）
       if (sc.offset === 0 && h.requests > 0 && h._doneKeys && h._doneKeys[fk]) {
         sc.offset = size;
-        return h;
+        return '';
       }
-      if (size < sc.offset) {                      // 文件被截断：整体重扫
-        sc.offset = 0; sc.partial = '';
-        h.input = h.output = h.cacheRead = h.cacheCreate = h.requests = 0;
-        h.models = {}; h.first = h.last = 0;
-        h.reqModels = {}; h.reqUsage = {};   // 重扫必须清空，否则会在旧值上翻倍
-      }
-      if (size === sc.offset) return h;
+      if (size < sc.offset) return 'rebuild';      // 文件被截断/重写：整会话重扫
+      if (size === sc.offset) return '';
       var len = Math.min(size - sc.offset, 8 << 20); // 每次最多 8MB（大 JSONL 几轮扫完，避免费用/积分长时间停在部分值）
       var buf = Buffer.alloc(len), fd;
       try {
         fd = fs.openSync(file, 'r');
         fs.readSync(fd, buf, 0, len, sc.offset);
-      } catch (e) { return h; } finally {
+      } catch (e) { return ''; } finally {
         if (fd !== undefined) { try { fs.closeSync(fd); } catch (e) { } }
       }
       sc.offset += len;
@@ -311,6 +375,11 @@
           var crid = pdx.conversationRequestId;
           var mdl = pdx.requestModelId || pdx.model;
           if (mdl) h.reqModels[crid] = mdl;
+          // 主线程最近一次请求（决定"当前单位"），子代理请求不参与
+          if (mdl && !isSub) {
+            var cms = cridMs(crid);
+            if (cms && cms >= (h.lastMainAt || 0)) { h.lastMainAt = cms; h.lastMainModel = mdl; }
+          }
         }
         var u = d.providerData && d.providerData.usage;
         if (!u && d.message && d.message.usage) u = d.message.usage;
@@ -323,6 +392,12 @@
         var cc2 = u.cache_creation_input_tokens || 0;
         h.input += i2; h.output += o2; h.cacheRead += cr2; h.cacheCreate += cc2;
         h.requests += (u.requests || 1);
+        // 子代理部分单独记一份：总数要算进去（否则漏账），但也要能说清"其中多少"，
+        // 否则用户看到一个 8M 的会话变成 33M 会以为统计坏了。
+        if (isSub) {
+          h.sub.input += i2; h.sub.output += o2;
+          h.sub.requests += (u.requests || 1);
+        }
         var ts = +d.timestamp || 0;
         if (ts) { if (!h.first) h.first = ts; if (ts > h.last) h.last = ts; }
         var mk = (d.providerData && (d.providerData.requestModelId || d.providerData.model)) || '';
@@ -347,7 +422,7 @@
           if (mid && ru.msgIds && ru.msgIds.length < 60 && ru.msgIds.indexOf(mid) < 0) ru.msgIds.push(mid);
         }
       }
-      return h;
+      return '';
     }
 
     function findJsonl(sid) {
@@ -367,7 +442,11 @@
       var mod = require('node:sqlite');
       var db = new mod.DatabaseSync(DB, { readOnly: true });
       try {
-        var rows = db.prepare('select session_id, used, size, credit_json, updated_at from session_usage order by updated_at desc limit 200').all() || [];
+        // 200 → 1000：累计是"对全部会话求和"，200 会在长期使用后静默少算。
+        // 仍然保留上限：每个会话都要 stat 一次日志文件，无上限会让 1s 轮询变慢。
+        var ROW_LIMIT = 1000;
+        var rows = db.prepare('select session_id, used, size, credit_json, updated_at '
+          + 'from session_usage order by updated_at desc limit ' + ROW_LIMIT).all() || [];
         var cwd = null;
         try {
           var r = db.prepare('select cwd, context_window, thought_level, mode, user_id from sessions where id = ?').get(rows[0] ? rows[0].session_id : '');
@@ -698,7 +777,16 @@
 
     // 会话计费画像（unit/mixed/latestModel）。实现见 ui/billing_core.js::sessionBilling，
     // 放在内核里是为了能被 tools/test_billing.py 直接测到，不留"只有运行时才知道对不对"的逻辑。
-    function sessionBilling(h) { return WBBilling.sessionBilling(h && h.reqModels, billingCfg()); }
+    // 注意：unit 只看主线程的请求——子代理用的是另一套模型时，账本不应跟着跳单位。
+    function sessionBilling(h) {
+      var sb = WBBilling.sessionBilling(h && h.reqModels, billingCfg());
+      if (h && h.lastMainModel) {
+        sb.unit = isFeeModel(h.lastMainModel) ? 'fee' : 'credit';
+        sb.model = h.lastMainModel;
+        sb.at = h.lastMainAt || sb.at;
+      }
+      return sb;
+    }
 
     // 读 WorkBuddy 自己的路由快照，拿到「用户当前正在看的会话」。
     // 来源：<userdir>/<uid>/startup-route.json → {"path":"/conversation/<sid>","savedAt":ms}
@@ -902,6 +990,9 @@
             input: hh ? hh.input : 0, output: hh ? hh.output : 0,
             cacheRead: hh ? hh.cacheRead : 0, cacheCreate: hh ? hh.cacheCreate : 0,
             requests: hh ? hh.requests : 0, tokens: tks,
+            // 子代理消耗单列，便于「按会话」里看出谁在放大用量
+            subTokens: hh && hh.sub ? (hh.sub.input + hh.sub.output) : 0,
+            subFiles: hh ? (hh.subFiles || 0) : 0,
             models: hh ? Object.keys(hh.models) : [],
             first: hh ? hh.first : 0, last: hh ? hh.last : 0
           });
@@ -1023,7 +1114,19 @@
         mcp: st.mcp,
         model: st.model, provider: st.provider,
         thought: db.thought || '', mode: db.mode || '', user: db.user || '',
-        tokens: st.tokens,
+        // 会话 token 以 HIST（主文件 + 子代理文件）为准，而不是只看主文件：
+        // 两个数不一致时，状态条和账本会互相打脸（用户就是这么发现漏账的）。
+        tokens: (function () {
+          var hc = HIST[String(cur.session_id)];
+          if (!hc) return st.tokens;
+          return {
+            input: hc.input, output: hc.output,
+            cacheRead: hc.cacheRead, cacheCreate: hc.cacheCreate,
+            requests: hc.requests, total: hc.input + hc.output,
+            sub: hc.sub || { input: 0, output: 0, requests: 0 },
+            subFiles: hc.subFiles || 0
+          };
+        })(),
         byModel: models,
         tools: { list: toolList, running: running },
         agents: agents,
@@ -1072,6 +1175,8 @@
           return arr.slice(0, 1000);
         })(),
         scanPending: scanPending,
+        // 触发 1000 行上限时明确告知，避免"累计"看起来是精确值其实是截断值
+        rowsCapped: (db.rows || []).length >= 1000,
         at: Date.now()
       };
     }

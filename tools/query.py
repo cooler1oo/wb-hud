@@ -144,9 +144,26 @@ def calc_fee(usage, ms, model=""):
     return (paid * p["input"] + cache_tok * p["cacheRead"] + output_tok * p["output"]) / 1e6
 
 
+def path_sid(path):
+    """从一个 jsonl 路径推出它属于哪个会话，以及是不是子代理文件。
+
+    客户端两种布局（实测）：
+      <projects>/<项目>/<会话ID>.jsonl                    → 主会话
+      <projects>/<项目>/<会话ID>/subagents/agent-x.jsonl  → 子代理，属于 <会话ID>
+
+    旧实现只把文件名当会话 ID，子代理请求于是被记成 "agent-x" 这种假会话：
+    它的费用进了全局合计却掉不进任何会话，token 更是完全没被统计
+    （实测某会话主文件 7.98M + 子代理 25.06M，账本只显示 8M）。
+    """
+    parts = str(path).replace(chr(92), "/").split("/")
+    if len(parts) >= 3 and parts[-2] == "subagents":
+        return parts[-3], True
+    return os.path.splitext(parts[-1])[0], False
+
+
 def scan_model_map():
     """扫 projects/**/*.jsonl，建 conversationRequestId → [model, usage] 映射，
-    同时建 crid → 会话 ID（文件名即会话 ID）。
+    同时建 crid → 会话 ID（主会话文件按文件名，子代理文件归到父目录名）。
 
     第二个映射是 2026-11-26 新增的：判断"这个会话最近一次请求用的是什么单位"
     必须知道请求属于哪个会话，而 credit_json 只覆盖有积分条目的请求
@@ -154,7 +171,7 @@ def scan_model_map():
     带磁盘缓存（.modelmap.json），按文件的 mtime+size 判断是否需要重扫。"""
     # 每次都全量重建：增量累加会因同一文件被重复扫而把 usage 累加成 N 倍
     # （实测曾出现 4 倍偏差，导致费用虚高）。全量扫描 106MB 仅约 1 秒，代价可接受。
-    cache_files, maps, sid_of = {}, {}, {}
+    cache_files, maps, sid_of, sub_crids = {}, {}, {}, set()
     try:
         files = glob.glob(PROJECTS + "/**/*.jsonl", recursive=True)
     except Exception:
@@ -166,7 +183,7 @@ def scan_model_map():
         except OSError:
             continue
         cache_files[key] = [st.st_mtime, st.st_size]
-        sid = os.path.splitext(os.path.basename(f))[0]
+        sid, is_sub = path_sid(f)
         try:
             with open(f, encoding="utf-8", errors="ignore") as fh:
                 for line in fh:
@@ -182,6 +199,8 @@ def scan_model_map():
                         continue
                     if crid not in sid_of:
                         sid_of[crid] = sid
+                        if is_sub:
+                            sub_crids.add(crid)
                     mdl = pd.get("requestModelId") or pd.get("model")
                     if mdl and crid not in maps:
                         maps[crid] = [mdl, None]
@@ -204,11 +223,41 @@ def scan_model_map():
         except OSError:
             pass
     try:
-        json.dump({"files": cache_files, "map": maps, "sids": sid_of},
+        json.dump({"files": cache_files, "map": maps, "sids": sid_of,
+                   "subs": sorted(sub_crids)},
                   open(CACHE, "w", encoding="utf-8"))
     except Exception:
         pass
-    return maps, sid_of
+    return maps, sid_of, sub_crids
+
+
+def session_tokens(model_map, sid_of, sid, sub_crids=()):
+    """按会话汇总 token（含子代理），并把子代理部分单独列出来。
+
+    为什么单独列：子代理是"隐藏的放大器"——一个看起来 8M 的会话可能真实
+    是 33M。只给总数会让用户以为统计错了；只给主线程数则等于漏账。
+    requests 按 crid 计（一个 crid = 一次 API 请求，多行是流式/多步）。
+    """
+    sub = set(sub_crids)
+    tot = {"input": 0, "output": 0, "cacheRead": 0, "cacheCreate": 0, "requests": 0}
+    s = {"input": 0, "output": 0, "cacheRead": 0, "cacheCreate": 0, "requests": 0}
+    for crid, pair in model_map.items():
+        if sid_of.get(crid) != sid:
+            continue
+        u = pair[1] or [0, 0, 0, 0]
+        tot["input"] += u[0]
+        tot["output"] += u[1]
+        tot["cacheRead"] += u[2]
+        tot["cacheCreate"] += u[3]
+        tot["requests"] += 1
+        if crid in sub:
+            s["input"] += u[0]
+            s["output"] += u[1]
+            s["cacheRead"] += u[2]
+            s["cacheCreate"] += u[3]
+            s["requests"] += 1
+    tot["sub"] = s
+    return tot
 
 
 TS_MIN = 1420070400000   # 2015-01-01
@@ -326,7 +375,10 @@ def main():
         except Exception:
             pass
 
-        model_map, sid_of = ({}, {}) if args.no_scan else scan_model_map()
+        if args.no_scan:
+            model_map, sid_of, sub_crids = {}, {}, set()
+        else:
+            model_map, sid_of, sub_crids = scan_model_map()
 
         today = datetime.date.today()
         today_s = today.strftime("%Y-%m-%d")
@@ -426,6 +478,8 @@ def main():
                         "latestModel": latest_model,
                         "latestAt": mine[-1][0] if mine else 0,
                         "mixed": bool(has_fee and has_credit),
+                        # 含子代理的 token 汇总；tokens.sub 是其中子代理那部分
+                        "tokens": session_tokens(model_map, sid_of, cur_sid, sub_crids),
                         # 兼容旧字段：语义收窄为"本会话曾用过费用模型"
                         "usesFeeModel": uses_fee},
             "today": by_day.get(today_s, 0),

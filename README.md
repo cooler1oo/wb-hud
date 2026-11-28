@@ -56,8 +56,26 @@ uninstall.cmd
 
 ```bash
 python tools/sync_billing.py     # 数据 + 逻辑 → 内联进主进程
-python tools/test_billing.py     # 31 项回归，全过才算改对
+python tools/test_billing.py     # 39 项回归，全过才算改对
 ```
+
+## 子代理（subagents）怎么算
+
+一个会话可能不止一份日志：
+
+```
+<projects>/<项目>/<会话ID>.jsonl                     ← 主线程
+<projects>/<项目>/<会话ID>/subagents/agent-*.jsonl    ← 每个子代理一份
+```
+
+两处都算同一个会话。但**单位只看主线程**：子代理可能用另一套模型，让它决定
+「显示积分还是显示 ¥」会把账本带偏（你下一条消息用的是主线程的模型）。
+
+侧栏 Token 区会多一行「其中子代理」，因为一个看起来 8M 的会话可能真实是 33M——
+不标出来，用户会以为是统计坏了。
+
+> 历史：2026-11-28 之前只扫主线程文件，子代理的 token 与费用整段漏掉
+> （实测某会话主文件 7.98M + 子代理 25.06M，界面显示 8M、费用少算 78%）。
 
 ## 目录
 
@@ -77,7 +95,7 @@ tools/         CLI 与安装
   selftest.py        一键体检
   repair_backup.py   备份丢失时从已注入的 asar 反推干净版
 skills/        agent 技能（hud / ledger）
-scripts/       CI 用：按改动范围决定跑哪些检查
+scripts/       CI 用：按改动范围决定跑哪些检查 + 主进程扫描单测
 ```
 
 两个「构建产物」改完源文件后要重新生成：
@@ -93,7 +111,7 @@ python tools/sync_billing.py        # billing_core.js → main_addon.js
 |---|---|---|---|
 | ① | `git commit` 前 | ruff、计费规则是否同步、JS 语法 | `.pre-commit-config.yaml` |
 | ② | 开 PR 时 | 按改动范围只跑相关的（限时 5 分钟） | `.github/workflows/pr-fast.yml` |
-| ③ | 合进 `main` 后 | 全部：ruff + 语法 + 同步检查 + 31 项回归 | `.github/workflows/main-full.yml` |
+| ③ | 合进 `main` 后 | 全部：ruff + 语法 + 同步检查 + 39 项回归 + 扫描单测 | `.github/workflows/main-full.yml` |
 
 为什么要这么拆：AI 写代码时一天能出几十个 PR，每个都跑全量，CI 就排队、烧额度。
 ② 只跑「这次改到的部分」，③ 才做全量兜底。这套做法来自 [ai-era-ci](https://github.com/cooler1oo/ai-era-ci-template) 技能。
@@ -106,7 +124,8 @@ python tools/sync_billing.py        # billing_core.js → main_addon.js
 python -m py_compile tools/*.py ui/*.py      # Python 语法
 for f in ui/*.js; do node --check "$f"; done   # 前端脚本语法（没有构建步骤，只有这一步）
 python tools/sync_billing.py --check           # 计费规则是否已同步（改过规则没 sync 会红）
-python tools/test_billing.py                   # 31 项回归
+python tools/test_billing.py                   # 39 项回归
+node scripts/test_hist_scan.js                  # 主进程扫描（子代理汇总）
 ```
 
 `python tools/selftest.py` 是「体检」：插件文件齐不齐、库能不能读、客户端补丁状态是否一致、备份在不在。

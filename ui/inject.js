@@ -1181,7 +1181,11 @@
       var tk = el("span", "hud-dim", "缓存命中 " + hitPct.toFixed(0) + "%");
       tk.title = "提示缓存（prompt cache）：上一轮发过的上下文被服务端缓存，下一轮直接复用，按更低的单价计费。\n"
         + "命中 " + tok(t.cacheRead) + " / 输入 " + tok(t.input) + "，命中率 " + hitPct.toFixed(1) + "%\n"
-        + "累计输出 " + tok(t.output) + "，共 " + t.requests + " 次请求";
+        + "累计输出 " + tok(t.output) + "，共 " + t.requests + " 次请求"
+        + (t.sub && t.sub.requests
+          ? "\n其中子代理：输入 " + tok(t.sub.input) + " / 输出 " + tok(t.sub.output)
+            + "（" + t.sub.requests + " 次请求）"
+          : "");
       addSide("缓存命中 " + hitPct.toFixed(0) + "%", tk.title);
     }
     if (cfg("showPromptCache", false) && (t.cacheRead || t.cacheCreate)) {
@@ -1189,7 +1193,11 @@
         "提示缓存：读命中 " + tok(t.cacheRead) + " / 写入 " + (t.cacheCreate ? tok(t.cacheCreate) : "无字段"));
     }
     if (cfg("showSessionTokens", false)) {
-      addSide(tok((t.input || 0) + (t.output || 0)) + " tok", "本会话 token 总量（含缓存命中）：" + tok(t.total));
+      addSide(tok((t.input || 0) + (t.output || 0)) + " tok",
+        "本会话 token 总量（含缓存命中与子代理）：" + tok(t.total)
+        + (t.sub && t.sub.requests
+          ? "\n其中子代理输入 " + tok(t.sub.input) + " / 输出 " + tok(t.sub.output)
+          : ""));
     }
     if (cfg("showSpeed", false) && d.durationMs > 1000 && t.output) {
       var sp2 = (t.output / (d.durationMs / 1000)).toFixed(1);
@@ -1415,12 +1423,19 @@
     } else {
     h.push(rowHTML("输入", tok(t.input), "inputTokens 累计（每轮重发上下文，数值很大是正常的）"));
     h.push(rowHTML("输出", tok(t.output), "outputTokens 累计"));
-    h.push(rowHTML("总计", tok(t.total), "totalTokens 累计"));
+    h.push(rowHTML("总计", tok(t.total), "totalTokens 累计（含子代理）"));
     h.push(rowHTML("缓存命中", tok(t.cacheRead), "来自 inputTokensDetails[].cached_tokens"));
     h.push(rowHTML("缓存写入", t.cacheCreate ? tok(t.cacheCreate) : "—",
       "本机日志没有 cache_creation 数据，ccusage 的这一列无法还原"));
     h.push(rowHTML("命中率", t.input ? (t.cacheRead / t.input * 100).toFixed(1) + "%" : "—", "命中 / 输入"));
-    h.push(rowHTML("请求数", t.requests, "调用次数"));
+    h.push(rowHTML("请求数", t.requests, "调用次数（含子代理）"));
+    // 子代理消耗单列：一个"看起来 8M"的会话可能真实是 33M，不标出来就会被当成统计错误
+    if (t.sub && t.sub.requests) {
+      h.push(rowHTML("其中子代理", tok((t.sub.input || 0) + (t.sub.output || 0)),
+        "子代理（subagents/*.jsonl）的 input+output 累计，共 " + t.sub.requests + " 次请求"
+        + (t.subFiles ? "、" + t.subFiles + " 个日志文件" : "")
+        + "\n这些请求原先没有被计入，2026-11-28 修复"));
+    }
     }
 
     if (_c.secBlocks && (d.blocks || []).length) {
@@ -1482,20 +1497,24 @@
       }
     }
     if (_c.secSession && (d.sessions || []).length) {
+      if (d.rowsCapped) {
+        h.push("<div class='hud-sub' style='opacity:.65'>注：累计只覆盖最近 1000 个会话（更多会话需分页，暂未实现）</div>");
+      }
       h.push("<div class='hud-sub'>按会话 · 前 10</div>");
       d.sessions.forEach(function (x) {
         var nm = x.title ? String(x.title).slice(0, 16) : (x.id || "").slice(0, 8);
         var tks = x.tokens || ((x.input || 0) + (x.output || 0) + (x.cacheRead || 0) + (x.cacheCreate || 0));
+        var subNote = x.subTokens ? " · 其中子代理 " + tok(x.subTokens) : "";
         if (drawerMode === "fee") {
           h.push(rowHTML(nm, "¥" + ((x.fee || 0) >= 100 ? Math.round(x.fee || 0) : (x.fee || 0).toFixed(2)),
-            (x.title ? x.title + " · " : "") + "会话 " + x.id + " · 费用 ¥" + (x.fee || 0).toFixed(4)));
+            (x.title ? x.title + " · " : "") + "会话 " + x.id + " · 费用 ¥" + (x.fee || 0).toFixed(4) + subNote));
           return;
         }
         h.push(rowHTML(nm, x.credit + " · " + tok(tks),
           (x.title ? x.title + " · " : "") + "会话 " + x.id +
           " · 输入 " + tok(x.input) + " / 输出 " + tok(x.output) +
           " / 缓存读 " + tok(x.cacheRead) + " / 缓存写 " + (x.cacheCreate ? tok(x.cacheCreate) : "无") +
-          " · " + (x.requests || 0) + " 条" +
+          " · " + (x.requests || 0) + " 条" + subNote +
           ((x.models || []).length ? " · 模型 " + x.models.join(", ") : "")));
       });
     }

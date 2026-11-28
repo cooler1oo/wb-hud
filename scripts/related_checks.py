@@ -80,6 +80,7 @@ def main():
         for f in sorted(os.listdir(os.path.join(ROOT, "ui"))):
             if f.endswith(".js"):
                 ok &= sh(["node", "--check", os.path.join("ui", f)])
+        ok &= sh(["node", os.path.join("scripts", "test_hist_scan.js")])
         ok &= sh([sys.executable, os.path.join("tools", "test_billing.py")])
         return 0 if ok else 1
 
@@ -97,6 +98,9 @@ def main():
         ok &= sh(["node", "--check", f])
     if need_billing:
         ok &= sh([sys.executable, os.path.join("tools", "test_billing.py")])
+    # 主进程的扫描逻辑改了就必跑它的单测（子代理汇总/截断重建都在里面）
+    if "ui/main_addon.js" in files or "scripts/test_hist_scan.js" in files:
+        ok &= sh(["node", os.path.join("scripts", "test_hist_scan.js")])
 
     print("[ok] 相关检查完成" if ok else "[x] 有检查未通过", flush=True)
     return 0 if ok else 1

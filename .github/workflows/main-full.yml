@@ -33,6 +33,11 @@ jobs:
         run: |
           for f in ui/*.js; do node --check "$f"; done
 
+      # 主进程的日志扫描：子代理归并、增量不重复、截断后重建。
+      # 这段逻辑读的是客户端真实文件布局，只能用构造目录的方式测。
+      - name: 主进程扫描逻辑（子代理汇总）
+        run: node scripts/test_hist_scan.js
+
       - name: 计费规则已同步
         run: python tools/sync_billing.py --check
 

@@ -313,12 +313,71 @@ def test_subprocess_contract():
     check("_proc 强制 UTF-8 解码并容错", 'encoding="utf-8"' in core and "errors" in core)
 
 
+def test_subagent_rollup():
+    """子代理请求必须归到父会话（token 与费用都要算）。
+
+    真实事故（2026-11-28）：某会话主文件 input 7.98M，子代理文件另有 25.06M，
+    但账本只显示 8M、费用只算到 ¥0.76（实际 ¥3.53）。原因是数据模型假设
+    「一个会话 = 一个 .jsonl」，而子代理日志在 <会话ID>/subagents/*.jsonl 下，
+    两处扫描（主进程 fileMap、query.py 的 basename→sid）都只认主文件。
+    """
+    import tempfile
+    SID = "aaaa1111-2222-3333-4444-555566667777"
+    sub_crid = "01a21d6ab91b7a8783dbc6b9b7cb1847"
+    main_crid = "01a21d61ddda73c9b9e56f784b078fc5"
+
+    tmp = tempfile.mkdtemp(prefix="wb-hud-sub-")
+    proj = os.path.join(tmp, "proj")
+    os.makedirs(os.path.join(proj, SID, "subagents"))
+    try:
+        def row(crid, model, i, o, cr):
+            return json.dumps({"providerData": {
+                "conversationRequestId": crid, "requestModelId": model,
+                "usage": {"inputTokens": i, "outputTokens": o,
+                          "inputTokensDetails": [{"cached_tokens": cr}]}}}, ensure_ascii=False)
+
+        model = "custom-local:deepseek-v4.1-flash-1017"
+        with open(os.path.join(proj, SID + ".jsonl"), "w", encoding="utf-8") as fh:
+            fh.write(row(main_crid, model, 1000000, 1000, 0) + "\n")
+        with open(os.path.join(proj, SID, "subagents", "agent-x.jsonl"), "w", encoding="utf-8") as fh:
+            fh.write(row(sub_crid, model, 5000000, 5000, 0) + "\n")
+
+        old = (Q.PROJECTS, Q.CACHE)
+        Q.PROJECTS, Q.CACHE = tmp, os.path.join(tmp, ".modelmap.json")
+        try:
+            maps, sid_of, subs = Q.scan_model_map()
+        finally:
+            Q.PROJECTS, Q.CACHE = old
+
+        check("子代理请求被扫描到", sub_crid in maps, str(list(maps)[:3]))
+        check("子代理请求归到父会话（不是 agent-xxx）", sid_of.get(sub_crid) == SID,
+              "得到 %s" % sid_of.get(sub_crid))
+
+        # 费用：父会话必须包含子代理那 5M 输入（忙时 2 元/百万 ≈ 10 元，闲时 ≈5 元）
+        f = 0.0
+        for crid, pair in maps.items():
+            if sid_of.get(crid) != SID:
+                continue
+            f += Q.calc_fee(pair[1], Q.key_ts(crid), pair[0])
+        check("父会话费用包含子代理消耗（>5 元）", f > 5.0, "得到 ¥%.4f" % f)
+
+        # token 汇总：主文件 1M + 子代理 5M = 6M
+        tok = Q.session_tokens(maps, sid_of, SID, subs)
+        check("父会话 token 汇总包含子代理（input=6,000,000）",
+              tok["input"] == 6000000, json.dumps(tok, ensure_ascii=False))
+        check("子代理 token 单独可见（sub.input=5,000,000）",
+              tok["sub"]["input"] == 5000000, json.dumps(tok.get("sub"), ensure_ascii=False))
+    finally:
+        import shutil
+        shutil.rmtree(tmp, ignore_errors=True)
+
+
 def main():
     print("计费规则回归测试")
     print("-" * 60)
     for fn in (test_classification, test_price_book, test_fee_math, test_dirty_timestamps,
-               test_session_rule, test_sync_consistency, test_js_parity, test_real_logs,
-               test_subprocess_contract):
+               test_session_rule, test_subagent_rollup, test_sync_consistency, test_js_parity,
+               test_real_logs, test_subprocess_contract):
         print("[%s]" % fn.__name__.replace("test_", ""))
         fn()
     bad = [c for c in checks if not c[1]]
