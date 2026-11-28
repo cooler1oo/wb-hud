@@ -1439,7 +1439,9 @@
     }
 
     if (_c.secBlocks && (d.blocks || []).length) {
-      h.push("<div class='hud-sub'>5 小时窗口 · 近 4</div>");
+      // 5 小时窗口按"事件时间"分桶，事件只来自主线程日志（子代理的日志是另一份文件，
+      // 没有并入事件流）。标题里写明，避免与上方含子代理的合计对不上时被当成 bug。
+      h.push("<div class='hud-sub'>5 小时窗口 · 近 4（仅主线程）</div>");
       d.blocks.slice().reverse().forEach(function (b) {
         var dt = new Date(b.from), dt2 = new Date(b.to || b.from);
         var lab = (dt.getMonth() + 1) + "/" + dt.getDate() + " "
