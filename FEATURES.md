@@ -254,3 +254,38 @@ python tools/test_billing.py     → 39 项（新增 subagent_rollup：子代理
 node   scripts/test_hist_scan.js → 8 项（增量不重复、截断重建、sub 单列、主线程模型记录）
 真实数据：会话 6403e986 费用 ¥0.7589 → ¥4.0035，token 8.0M → 38.5M（含子代理 25.7M）
 ```
+
+---
+
+## 2026-11-28 新增：子代理分区（动态/token/费用/时长）+ 状态条缓存命中
+
+### 需求
+账本只把子代理并进了总数，看不到"哪个子代理在干活、各自花了多少"。另外缓存命中率只在侧栏，状态条上没有。
+
+### 数据来源（实测会话 6403e986，4 个子代理文件 / 2 类 agent）
+
+| agent | 文件 | input | turns | 工具调用（Top） |
+|---|---|---|---|---|
+| software-architect | 2 | 106,825,848 | 13 | Bash×221 Read×44 Edit×39 |
+| software-engineer | 2 | 76,861,231 | 3 | Bash×153 Edit×68 Read×38 |
+
+### 实现
+- `main_addon`：扫描子代理文件时按 `providerData.agent` 分组，累计 token、请求轮次、
+  工具调用（`type=function_call` 的 `name`）、每个文件自身的首尾跨度；
+  费用按请求归属回填到 agent（`h.subCridAgent`）。
+- **时长口径**：`Σ(每个 agent-*.jsonl 自身跨度)`，不是"该 agent 全部请求的首尾差"——
+  后者会跨会话中断/隔天继续，实测会报出 918 分钟（15 小时）的假时长。
+- 界面：侧栏新增「子代理 · N 个 / 合计 X M / 每个 agent 一行（¥ · 时长）」；
+  账本抽屉新增「子代理 · N 个」分区（token · 费用 · 时长，悬浮看工具动态）；
+  状态条 Context 之后新增「缓存 83%」。
+- CLI：`session.subAgents[]` 与界面同源（name/input/output/turns/files/ms）。
+- `.hist.json` 缓存 v4 → v5（分组信息需要重扫才能建立）。
+
+### 验证
+```
+node scripts/test_hist_scan.js  → 19 项（分组/文件数/工具数/时长=文件跨度之和）
+python tools/test_billing.py    → 42 项（含 subAgents 分组）
+Chromium 渲染验证 16/16：
+  侧栏「子代理 · 2 个 / 合计 184.33M / software-architect ¥12.34 · 1 时 30 分」
+  状态条「Context 14% │ 缓存 83% │ 积分 32.26 │ 费用 ¥16.60」
+```

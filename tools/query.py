@@ -171,7 +171,10 @@ def scan_model_map():
     带磁盘缓存（.modelmap.json），按文件的 mtime+size 判断是否需要重扫。"""
     # 每次都全量重建：增量累加会因同一文件被重复扫而把 usage 累加成 N 倍
     # （实测曾出现 4 倍偏差，导致费用虚高）。全量扫描 106MB 仅约 1 秒，代价可接受。
-    cache_files, maps, sid_of, sub_crids = {}, {}, {}, set()
+    cache_files, maps, sid_of, sub_crids, agent_of = {}, {}, {}, set(), {}
+    # 子代理运行时长：按"每个 agent-*.jsonl 文件自身的首尾跨度"求和。
+    # 不能用该 agent 全部请求的首尾差——它会跨会话中断/隔天继续，报出 15 小时这种假时长。
+    file_span, file_agent = {}, {}
     try:
         files = glob.glob(PROJECTS + "/**/*.jsonl", recursive=True)
     except Exception:
@@ -199,11 +202,24 @@ def scan_model_map():
                         continue
                     if crid not in sid_of:
                         sid_of[crid] = sid
-                        if is_sub:
-                            sub_crids.add(crid)
+                    if is_sub:
+                        sub_crids.add(crid)
+                        # agent 先收集，等 maps[crid] 建好后回填（此刻可能还没建）
+                        _ag = pd.get("agent")
+                        if _ag:
+                            agent_of.setdefault(crid, _ag)
+                            file_agent[key] = _ag
+                        _ts = d.get("timestamp") or 0
+                        if _ts:
+                            sp = file_span.get(key) or [0, 0]
+                            if not sp[0]:
+                                sp[0] = _ts
+                            if _ts > sp[1]:
+                                sp[1] = _ts
+                            file_span[key] = sp
                     mdl = pd.get("requestModelId") or pd.get("model")
                     if mdl and crid not in maps:
-                        maps[crid] = [mdl, None, 0]
+                        maps[crid] = [mdl, None, 0, None]
                     elif mdl and isinstance(maps.get(crid), list) and not maps[crid][0]:
                         maps[crid][0] = mdl
                     u = pd.get("usage")
@@ -226,27 +242,40 @@ def scan_model_map():
                         maps[crid][2] = (maps[crid][2] or 0) + 1
         except OSError:
             pass
+    # 每个 agent 的运行时长 = 它名下各文件自身跨度之和（并行运行也不重复计时长）
+    agent_ms = {}
+    for _path, _ag in file_agent.items():
+        _sp = file_span.get(_path) or [0, 0]
+        if _sp[0] and _sp[1] > _sp[0]:
+            _key = (path_sid(_path)[0], _ag)
+            _files, _ms = agent_ms.get(_key) or (0, 0)
+            agent_ms[_key] = (_files + 1, _ms + (_sp[1] - _sp[0]))
+    # 回填 agent（此时 maps[crid] 一定已建好）
+    for _c, _a in agent_of.items():
+        if _c in maps and len(maps[_c]) > 3 and not maps[_c][3]:
+            maps[_c][3] = _a
     try:
         json.dump({"files": cache_files, "map": maps, "sids": sid_of,
-                   "subs": sorted(sub_crids)},
+                   "subs": sorted(sub_crids), "agents": agent_of},
                   open(CACHE, "w", encoding="utf-8"))
     except Exception:
         pass
-    return maps, sid_of, sub_crids
+    return maps, sid_of, sub_crids, agent_ms
 
 
-def session_tokens(model_map, sid_of, sid, sub_crids=()):
+def session_tokens(model_map, sid_of, sid, sub_crids=(), agent_ms=None):
     """按会话汇总 token（含子代理），并把子代理部分单独列出来。
 
     为什么单独列：子代理是"隐藏的放大器"——一个看起来 8M 的会话可能真实
     是 33M。只给总数会让用户以为统计错了；只给主线程数则等于漏账。
-    requests 按 crid 计（一个 crid = 一次 API 请求，多行是流式/多步）。
+    requests 按 usage 行计（一次模型调用一条），turns 按 crid 计（一次发言可能多步）。
     """
     sub = set(sub_crids)
     tot = {"input": 0, "output": 0, "cacheRead": 0, "cacheCreate": 0,
            "requests": 0, "turns": 0}
     s = {"input": 0, "output": 0, "cacheRead": 0, "cacheCreate": 0,
          "requests": 0, "turns": 0}
+    agents = {}
     for crid, pair in model_map.items():
         if sid_of.get(crid) != sid:
             continue
@@ -266,7 +295,31 @@ def session_tokens(model_map, sid_of, sid, sub_crids=()):
             s["cacheCreate"] += u[3]
             s["requests"] += rows
             s["turns"] += 1
+            # 按 agent 拆开：谁在干活、花了多少
+            name = (pair[3] if len(pair) > 3 and pair[3] else "subagent")
+            a = agents.get(name) or {"name": name, "input": 0, "output": 0,
+                                     "requests": 0, "turns": 0, "first": 0, "last": 0,
+                                     "files": 0, "ms": 0}
+            a["input"] += u[0]
+            a["output"] += u[1]
+            a["requests"] += rows
+            a["turns"] += 1
+            ts = key_ts(crid) or 0
+            if ts:
+                if not a["first"] or ts < a["first"]:
+                    a["first"] = ts
+                if ts > a["last"]:
+                    a["last"] = ts
+            agents[name] = a
     tot["sub"] = s
+    # 时长/文件数取自扫描阶段（各文件自身跨度之和），没有就退回首尾差
+    for _n, _a in agents.items():
+        _info = (agent_ms or {}).get((sid, _n))
+        if _info:
+            _a["files"], _a["ms"] = _info[0], _info[1]
+        elif _a["first"] and _a["last"]:
+            _a["ms"] = _a["last"] - _a["first"]
+    tot["subAgents"] = sorted(agents.values(), key=lambda x: -x["input"])
     return tot
 
 
@@ -386,9 +439,9 @@ def main():
             pass
 
         if args.no_scan:
-            model_map, sid_of, sub_crids = {}, {}, set()
+            model_map, sid_of, sub_crids, agent_ms = {}, {}, set(), {}
         else:
-            model_map, sid_of, sub_crids = scan_model_map()
+            model_map, sid_of, sub_crids, agent_ms = scan_model_map()
 
         today = datetime.date.today()
         today_s = today.strftime("%Y-%m-%d")
@@ -464,17 +517,24 @@ def main():
         # 旧实现只看 credit_json 的键，而费用请求大多不在 credit_json 里，
         # 于是刚切到自定义模型时会被判成"还在用积分"。
         mine = []
+        mine_main = []          # 只含主线程请求：决定"当前单位"
         for k, pair in model_map.items():
             if sid_of.get(k) != cur_sid or not pair[0]:
                 continue
             mine.append((key_ts(k) or 0, pair[0]))
+            if k not in sub_crids:
+                mine_main.append((key_ts(k) or 0, pair[0]))
         mine.sort()
+        mine_main.sort()
         cur_models = sorted({m for _t, m in mine})
-        latest_model = mine[-1][1] if mine else ""
+        # 单位跟主线程走：子代理可能用另一套模型，不该决定"下一条消息按什么计费"
+        latest_src = mine_main or mine
+        latest_model = latest_src[-1][1] if latest_src else ""
         unit = billing_unit(latest_model) if latest_model else "credit"
         has_fee = any(billing_unit(m) == "fee" for m in cur_models)
         has_credit = any(billing_unit(m) == "credit" for m in cur_models)
         uses_fee = has_fee
+        toks = session_tokens(model_map, sid_of, cur_sid, sub_crids, agent_ms)
 
         print(json.dumps({
             "session": {"id": cur_sid, "title": titles.get(cur_sid, ""),
@@ -486,10 +546,12 @@ def main():
                         # unit = 最近一次请求的单位（自动模式的依据）
                         "unit": unit,
                         "latestModel": latest_model,
-                        "latestAt": mine[-1][0] if mine else 0,
+                        "latestAt": latest_src[-1][0] if latest_src else 0,
                         "mixed": bool(has_fee and has_credit),
                         # 含子代理的 token 汇总；tokens.sub 是其中子代理那部分
-                        "tokens": session_tokens(model_map, sid_of, cur_sid, sub_crids),
+                        "tokens": {k: v for k, v in toks.items() if k != "subAgents"},
+                        # 子代理逐 agent 明细（与界面的「子代理」分区同源）
+                        "subAgents": toks.get("subAgents", []),
                         # 兼容旧字段：语义收窄为"本会话曾用过费用模型"
                         "usesFeeModel": uses_fee},
             "today": by_day.get(today_s, 0),

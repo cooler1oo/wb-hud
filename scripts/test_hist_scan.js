@@ -56,11 +56,20 @@ fs.mkdirSync(path.join(proj, SID, "subagents"), { recursive: true });
 const mainFile = path.join(proj, SID + ".jsonl");
 const subFile = path.join(proj, SID, "subagents", "agent-x.jsonl");
 
-function row(crid, model, i, o, cr) {
-  return JSON.stringify({ timestamp: Date.now(), providerData: {
+function row(crid, model, i, o, cr, agent, ts) {
+  const pd = {
     conversationRequestId: crid, requestModelId: model,
     usage: { inputTokens: i, outputTokens: o, requests: 1,
-             inputTokensDetails: [{ cached_tokens: cr }] } } }) + "\n";
+             inputTokensDetails: [{ cached_tokens: cr }] } };
+  if (agent) { pd.agent = agent; pd.isSubAgent = true; }
+  return JSON.stringify({ timestamp: ts || Date.now(), providerData: pd }) + "\n";
+}
+
+// 子代理的工具调用行（type=function_call，名字在顶层 name）
+function toolRow(name, agent, ts) {
+  return JSON.stringify({ type: "function_call", name: name, callId: "c" + Math.random(),
+    timestamp: ts || Date.now(),
+    providerData: { agent: agent, isSubAgent: true } }) + "\n";
 }
 
 let fails = 0;
@@ -91,6 +100,47 @@ try {
   h = api.histOf(SID, mainFile);
   ok("子代理文件被重写后整会话重建（3,000,000）", h.input === 3000000, String(h.input));
   ok("重建后 sub.input 正确（2,000,000）", h.sub.input === 2000000, String(h.sub.input));
+
+  // ---- 子代理按 agent 分组（动态 / token / 时长） ----
+  const SID2 = "bbbb1111-2222-3333-4444-555566667777";
+  fs.mkdirSync(path.join(proj, SID2, "subagents"), { recursive: true });
+  const main2 = path.join(proj, SID2 + ".jsonl");
+  const aFile = path.join(proj, SID2, "subagents", "agent-a.jsonl");
+  const bFile = path.join(proj, SID2, "subagents", "agent-b.jsonl");
+  const t0 = Date.now() - 600000, t1 = Date.now() - 420000, t2 = Date.now() - 60000;
+  fs.writeFileSync(main2, row("01a21d61ddda73c9b9e56f784b078fc5", "deepseek-v4.1-flash", 1000, 10, 0, "", t0));
+  fs.writeFileSync(aFile,
+    row("01a21d6ab91b7a8783dbc6b9cb184700", "custom-local:deepseek-v4.1-flash-1017", 1000000, 100, 0, "software-architect", t0)
+    + toolRow("Bash", "software-architect", t0 + 1000)
+    + toolRow("Bash", "software-architect", t0 + 2000)
+    + toolRow("Read", "software-architect", t0 + 3000)
+    + row("01a21d6ab91b7a8783dbc6b9cb184701", "custom-local:deepseek-v4.1-flash-1017", 2000000, 200, 0, "software-architect", t1));
+  const a2File = path.join(proj, SID2, "subagents", "agent-a2.jsonl");
+  fs.writeFileSync(a2File,
+    row("01a21d6ab91b7a8783dbc6b9cb184900", "custom-local:deepseek-v4.1-flash-1017", 100, 10, 0, "software-architect", t2));
+  fs.writeFileSync(bFile,
+    row("01a21d6ab91b7a8783dbc6b9cb184800", "custom-local:deepseek-v4.1-flash-1017", 500000, 50, 0, "software-engineer", t1)
+    + toolRow("Edit", "software-engineer", t2));
+  FILES[SID2] = main2;
+
+  const h2 = api.histOf(SID2, main2);
+  const ag = h2.subAgents || {};
+  ok("按 agent 分成 2 组", Object.keys(ag).length === 2, JSON.stringify(Object.keys(ag)));
+  ok("architect 的 token 归组正确（3,000,100）", (ag["software-architect"] || {}).input === 3000100,
+    JSON.stringify(ag["software-architect"]));
+  ok("architect 有 2 个日志文件", (ag["software-architect"] || {}).files === 2,
+    String((ag["software-architect"] || {}).files));
+  ok("architect 记 3 个请求轮次", (ag["software-architect"] || {}).turns === 3,
+    JSON.stringify(ag["software-architect"] && ag["software-architect"].turns));
+  const tools = (ag["software-architect"] || {}).tools || {};
+  ok("architect 的工具动态（Bash×2 / Read×1）", tools.Bash === 2 && tools.Read === 1, JSON.stringify(tools));
+  ok("engineer 独立成组（500,000）", (ag["software-engineer"] || {}).input === 500000,
+    JSON.stringify(ag["software-engineer"]));
+  // 时长 = 各文件自身跨度之和；若按"全部请求首尾差"会算成 t2-t0（隔了很久），那是假的
+  const archMs = (ag["software-architect"] || {}).ms || 0;
+  ok("architect 时长 = 文件跨度之和（≈3 分钟，而非跨到 t2 的 9 分钟）",
+    Math.abs(archMs - (t1 - t0)) < 5, archMs + " vs 首尾差 " + (t2 - t0));
+  ok("会话合计仍正确（1,000 + 3,000,100 + 500,000）", h2.input === 3501100, String(h2.input));
 } finally {
   fs.rmSync(tmp, { recursive: true, force: true });
 }

@@ -330,22 +330,25 @@ def test_subagent_rollup():
     proj = os.path.join(tmp, "proj")
     os.makedirs(os.path.join(proj, SID, "subagents"))
     try:
-        def row(crid, model, i, o, cr):
-            return json.dumps({"providerData": {
-                "conversationRequestId": crid, "requestModelId": model,
-                "usage": {"inputTokens": i, "outputTokens": o,
-                          "inputTokensDetails": [{"cached_tokens": cr}]}}}, ensure_ascii=False)
+        def row(crid, model, i, o, cr, agent=None):
+            pd = {"conversationRequestId": crid, "requestModelId": model,
+                  "usage": {"inputTokens": i, "outputTokens": o,
+                            "inputTokensDetails": [{"cached_tokens": cr}]}}
+            if agent:
+                pd["agent"] = agent
+                pd["isSubAgent"] = True
+            return json.dumps({"providerData": pd}, ensure_ascii=False)
 
         model = "custom-local:deepseek-v4.1-flash-1017"
         with open(os.path.join(proj, SID + ".jsonl"), "w", encoding="utf-8") as fh:
             fh.write(row(main_crid, model, 1000000, 1000, 0) + "\n")
         with open(os.path.join(proj, SID, "subagents", "agent-x.jsonl"), "w", encoding="utf-8") as fh:
-            fh.write(row(sub_crid, model, 5000000, 5000, 0) + "\n")
+            fh.write(row(sub_crid, model, 5000000, 5000, 0, "writer") + "\n")
 
         old = (Q.PROJECTS, Q.CACHE)
         Q.PROJECTS, Q.CACHE = tmp, os.path.join(tmp, ".modelmap.json")
         try:
-            maps, sid_of, subs = Q.scan_model_map()
+            maps, sid_of, subs, ams = Q.scan_model_map()
         finally:
             Q.PROJECTS, Q.CACHE = old
 
@@ -362,7 +365,7 @@ def test_subagent_rollup():
         check("父会话费用包含子代理消耗（>5 元）", f > 5.0, "得到 ¥%.4f" % f)
 
         # token 汇总：主文件 1M + 子代理 5M = 6M
-        tok = Q.session_tokens(maps, sid_of, SID, subs)
+        tok = Q.session_tokens(maps, sid_of, SID, subs, ams)
         check("父会话 token 汇总包含子代理（input=6,000,000）",
               tok["input"] == 6000000, json.dumps(tok, ensure_ascii=False))
         check("子代理 token 单独可见（sub.input=5,000,000）",
@@ -370,6 +373,13 @@ def test_subagent_rollup():
         # requests = 模型调用次数（usage 行数），turns = 发言轮次（唯一 crid）
         check("requests/turns 两个口径都在", tok["requests"] == 2 and tok["turns"] == 2,
               json.dumps({"requests": tok["requests"], "turns": tok["turns"]}))
+
+        # 子代理按 agent 拆开（界面的「子代理」分区与 CLI 同源）
+        sa = tok.get("subAgents") or []
+        check("子代理按 agent 分组", len(sa) == 1 and sa[0]["name"] == "writer",
+              json.dumps(sa, ensure_ascii=False))
+        check("分组内 token 正确（5,000,000）", sa and sa[0]["input"] == 5000000,
+              json.dumps(sa[0] if sa else {}, ensure_ascii=False))
     finally:
         import shutil
         shutil.rmtree(tmp, ignore_errors=True)

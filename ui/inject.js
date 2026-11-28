@@ -71,6 +71,7 @@
     if (n >= 1e3) return Math.round(n / 1e3) + "k";
     return String(n);
   }
+  // 时长格式化统一用文件下方已有的 fmtDur（输出「1 时 30 分」这种中文），不重复实现。
   function blocks(pct) {
     var a = cfgAll();
     function ch(v, d) {
@@ -237,6 +238,7 @@
     secToken: true, secBlocks: true, secProject: true,
     secModel: true, secSession: true, secWeek: true,
     secMonth: true, secDay: true, secAgent: true,
+    secSubagents: true,
     extraCmd: ""
   };
   function cfgAll() {
@@ -727,6 +729,7 @@
 
     dSettings.appendChild(row("账本分区（对应 ccusage --sections）", [
       chip("secToken", "Token 明细", "账本里的「Token · 本会话」分区（输入/输出/缓存/命中率）。"),
+      chip("secSubagents", "子代理分区", "账本与侧栏里的「子代理」分区：按 agent 分别显示 token、费用、工具动态、运行时长。"),
       chip("secBlocks", "5 小时窗口", "账本里的 5 小时计费窗口分区（对应 ccusage blocks）。"),
       chip("secProject", "按项目", "账本里的按项目汇总分区。"),
       chip("secAgent", "按 Agent", "账本里的按子代理汇总分区。"),
@@ -1055,6 +1058,23 @@
       }
     }
     h5.push("</div>");
+    // 子代理分区：有子代理才出现。token 已计入上方总数，这里按 agent 拆开看
+    var sas = d.subAgents || [];
+    if (cfg("secSubagents", true) && sas.length) {
+      var sTot = 0;
+      for (var si = 0; si < sas.length; si++) sTot += (sas[si].input || 0) + (sas[si].output || 0);
+      h5.push("<div class='hud-sec'>子代理 · " + sas.length + " 个</div>");
+      h5.push(row("合计", tok(sTot), "本会话子代理 token 合计（已计入上方的会话总数）"));
+      sas.slice(0, 4).forEach(function (a) {
+        var val = (a.fee ? "¥" + (a.fee >= 100 ? Math.round(a.fee) : a.fee.toFixed(2)) + " · " : "") + fmtDur(a.ms);
+        h5.push(row(a.name, val,
+          "文件 " + a.files + " 个 · 请求 " + a.turns + " 次 · 输入 " + tok(a.input) + " / 输出 " + tok(a.output)
+          + (a.tools && a.tools.length
+            ? "\n工具：" + a.tools.map(function (t) { return t.name + "×" + t.n; }).join("，")
+            : "")
+          + "\n时长 = 该子代理首次到最后一次请求的跨度"));
+      });
+    }
     // 动态区 / 信息区
     h5.push("<div class='hud-sec' id='wb-side-act-title' style='display:none'>动态</div>");
     h5.push("<div id='wb-side-act'></div>");
@@ -1263,6 +1283,15 @@
       dim.title = "已用 " + used + " / 窗口 " + size;
       l2.appendChild(dim);
     }
+    // 缓存命中率：放在状态条上，一眼看出这轮上下文有多少是复用的
+    if (cfg("showCacheHitRate", true) && t.input) {
+      var pC = pipe(); if (pC) l2.appendChild(pC);
+      var chPct = (t.cacheRead / t.input) * 100;
+      var chEl = el("span", "hud-dim", "缓存 " + chPct.toFixed(0) + "%");
+      chEl.title = "提示缓存命中率：命中 " + tok(t.cacheRead) + " / 输入 " + tok(t.input)
+        + "（含子代理）";
+      l2.appendChild(chEl);
+    }
     // 用量段（对应 claude-hud 的 usage bar；本产品以积分近似）
     if (cfg("showUsage", CFG_DEFAULTS.showUsage) && (d.today != null)) {
       var pU = pipe(); if (pU) l2.appendChild(pU);
@@ -1436,6 +1465,22 @@
         + (t.subFiles ? "、" + t.subFiles + " 个日志文件" : "")
         + "\n这些请求原先没有被计入，2026-11-28 修复"));
     }
+    }
+
+    // 子代理分区：每个 agent 单独一行（token / 费用 / 时长），悬浮看动态
+    var sasD = d.subAgents || [];
+    if (_c.secSubagents && sasD.length) {
+      h.push("<div class='hud-sub'>子代理 · " + sasD.length + " 个</div>");
+      sasD.forEach(function (a) {
+        h.push(rowHTML(a.name,
+          tok((a.input || 0) + (a.output || 0)) + (a.fee ? " · ¥" + a.fee.toFixed(2) : "") + " · " + fmtDur(a.ms),
+          "文件 " + a.files + " 个 · 请求 " + a.turns + " 次"
+          + "\n输入 " + tok(a.input) + " / 输出 " + tok(a.output)
+          + (a.tools && a.tools.length
+            ? "\n动态：" + a.tools.map(function (t2) { return t2.name + "×" + t2.n; }).join("  ")
+            : "")
+          + "\n时长 " + fmtDur(a.ms) + "（首次 → 最后一次请求）"));
+      });
     }
 
     if (_c.secBlocks && (d.blocks || []).length) {

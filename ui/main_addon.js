@@ -185,7 +185,7 @@
     // 版本号：聚合口径变更就递增，旧缓存自动作废并重扫。
     // v4（2026-11-28）：开始把 <会话ID>/subagents/*.jsonl 计入同一会话，
     // 旧缓存的数字本来就漏了子代理，继续用会"新代码 + 旧错数"。
-    var CACHE_VER = 4;
+    var CACHE_VER = 5;
     (function loadHistCache() {
       try {
         var fs2 = require('node:fs');
@@ -201,6 +201,9 @@
             for (var hk in j.hist) {
               var e = j.hist[hk];
               if (!e.sub) e.sub = { input: 0, output: 0, requests: 0 };
+              if (!e.subAgents) e.subAgents = {};
+              if (!e.subCridAgent) e.subCridAgent = {};
+              if (!e._subFileAgent) e._subFileAgent = {};
               HIST[hk] = e;
             }
             HSCAN = {};
@@ -308,6 +311,8 @@
         requests: 0, models: {}, first: 0, last: 0, compactions: 0,
         reqModels: {}, reqUsage: {}, subFiles: 0,
         sub: { input: 0, output: 0, requests: 0 },
+        // 子代理按 agent 分组：动态（工具调用）、token、时长都要能单独看
+        subAgents: {}, subCridAgent: {}, _subFileAgent: {},
         // 主线程最近一次请求：账本的"当前单位"只跟它走。
         // 子代理可能用另一套模型，让它带偏单位会显示错误的计费方式。
         lastMainAt: 0, lastMainModel: ''
@@ -321,6 +326,7 @@
       h.reqModels = {}; h.reqUsage = {}; h._doneKeys = {};
       h.sub = { input: 0, output: 0, requests: 0 };
       h.lastMainAt = 0; h.lastMainModel = '';
+      h.subAgents = {}; h.subCridAgent = {}; h._subFileAgent = {};
       var files = [fileMap()[sid]].concat(subFiles(sid));
       for (var i = 0; i < files.length; i++) {
         if (!files[i]) continue;
@@ -341,6 +347,15 @@
         rebuildHist(h, sid);
         scanHistFile(h, sid, file, false);
         for (var j = 0; j < subs.length; j++) scanHistFile(h, sid, subs[j], true);
+      }
+      // 每个 agent 的实际运行时长 = 其名下各文件自身跨度之和
+      for (var ak2 in h.subAgents) {
+        var a2 = h.subAgents[ak2], m2 = 0;
+        for (var s3 in (a2.spans || {})) {
+          var sp3 = a2.spans[s3];
+          if (sp3 && sp3.first && sp3.last > sp3.first) m2 += (sp3.last - sp3.first);
+        }
+        a2.ms = m2;
       }
       return h;
     }
@@ -379,6 +394,22 @@
         // 每请求的「conversationRequestId → 模型」映射（credit_json 的键就是 conversationRequestId，
         // 实测覆盖率 100%）；顺带记录单请求 usage，供费用模型按单价计价
         var pdx = d.providerData || null;
+        // 子代理逐 agent 归组：谁在干活、花了多少 token、调了哪些工具、跑了多久
+        var sa = null;
+        if (isSub && pdx && pdx.agent) {
+          var an = String(pdx.agent);
+          sa = h.subAgents[an] || (h.subAgents[an] = {
+            name: an, files: 0, input: 0, output: 0, turns: 0,
+            first: 0, last: 0, tools: {}, models: {},
+            // 每个文件自身的首尾跨度：求和才是"实际运行时长"。
+            // 用该 agent 全部请求的首尾差会跨会话中断/隔天继续，报出 15 小时这种假时长。
+            spans: {}
+          });
+          if (!h._subFileAgent[fk]) { h._subFileAgent[fk] = an; sa.files += 1; }
+          if (d.type === 'function_call' && d.name) {
+            sa.tools[d.name] = (sa.tools[d.name] || 0) + 1;
+          }
+        }
         if (pdx && pdx.conversationRequestId) {
           var crid = pdx.conversationRequestId;
           var mdl = pdx.requestModelId || pdx.model;
@@ -410,8 +441,22 @@
         if (ts) { if (!h.first) h.first = ts; if (ts > h.last) h.last = ts; }
         var mk = (d.providerData && (d.providerData.requestModelId || d.providerData.model)) || '';
         if (mk) h.models[mk] = 1;
+        if (sa) {
+          sa.input += i2; sa.output += o2;
+          if (mk) sa.models[mk] = 1;
+          if (ts) {
+            if (!sa.first) sa.first = ts;
+            if (ts > sa.last) sa.last = ts;
+            if (!sa.spans) sa.spans = {};
+            var sp = sa.spans[fk] || (sa.spans[fk] = { first: 0, last: 0 });
+            if (!sp.first) sp.first = ts;
+            if (ts > sp.last) sp.last = ts;
+          }
+        }
         var crid2 = pdx && pdx.conversationRequestId;
         if (crid2 && (i2 || o2)) {
+          // 该请求属于哪个子代理（费用按请求计，所以归属也要落在请求粒度）
+          if (sa && !h.subCridAgent[crid2]) { h.subCridAgent[crid2] = sa.name; sa.turns += 1; }
           // 同一请求的 usage 分散在多行（流式/多步），逐行累加。
           // 防重复：histOf 保证每行只解析一次（offset 单调推进 + partial 缓冲），
           // 且文件被截断/重扫时 reqUsage 会整体清空（见上方 size<offset 分支）。
@@ -870,6 +915,8 @@
       // 逐轮明细：供「消息末尾消耗行 + 悬浮卡」使用（crid 为键）
       var roundsMap = {};
       var creditBySid = {}, feeBySid = {}, platformBySid = {};
+      // 子代理费用按 agent 归集：sid -> {agent: ¥}
+      var subFeeBySid = {};
       var t0h = Date.now();
       var HIST_EMPTY = !Object.keys(HIST).length;
       var scanPending = false;
@@ -926,6 +973,12 @@
             var fu = sidUsage ? sidUsage[fk0] : null;
             var fv = fu ? calcFee(fu, frts, fmdl) : 0;
             feeHere += fv;
+            // 费用按请求计，请求归属到哪个 agent 就记到哪个 agent 头上
+            var agOfCrid = hh && hh.subCridAgent ? hh.subCridAgent[fk0] : null;
+            if (agOfCrid) {
+              var sf = subFeeBySid[sid] || (subFeeBySid[sid] = {});
+              sf[agOfCrid] = r4((sf[agOfCrid] || 0) + fv);
+            }
             feeByModel[fmdl] = Math.round(((feeByModel[fmdl] || 0) + fv) * 10000) / 10000;
             var fk1 = dayKey(frts), fk2 = weekKey(frts), fk3 = fk1.slice(0, 7);
             if (!byDay[fk1]) agg(byDay, fk1, null, false);
@@ -1181,6 +1234,28 @@
           }
           arr.sort(function (a, b) { return (b.first || 0) - (a.first || 0); });
           return arr.slice(0, 1000);
+        })(),
+        // 子代理逐 agent 明细：动态（工具）、token、费用、时长
+        subAgents: (function () {
+          var hc = HIST[String(cur.session_id)];
+          if (!hc || !hc.subAgents) return [];
+          var fmap = subFeeBySid[String(cur.session_id)] || {};
+          var out = [];
+          for (var ak in hc.subAgents) {
+            var s2 = hc.subAgents[ak];
+            var tl = [];
+            for (var tn in s2.tools) tl.push({ name: tn, n: s2.tools[tn] });
+            tl.sort(function (a, b) { return b.n - a.n; });
+            out.push({
+              name: s2.name, files: s2.files, input: s2.input, output: s2.output,
+              turns: s2.turns,
+              ms: s2.ms || 0,
+              fee: Math.round((fmap[s2.name] || 0) * 10000) / 10000,
+              tools: tl.slice(0, 6)
+            });
+          }
+          out.sort(function (a, b) { return b.input - a.input; });
+          return out.slice(0, 8);
         })(),
         scanPending: scanPending,
         // 触发 1000 行上限时明确告知，避免"累计"看起来是精确值其实是截断值
