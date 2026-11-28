@@ -367,6 +367,9 @@ def test_subagent_rollup():
               tok["input"] == 6000000, json.dumps(tok, ensure_ascii=False))
         check("子代理 token 单独可见（sub.input=5,000,000）",
               tok["sub"]["input"] == 5000000, json.dumps(tok.get("sub"), ensure_ascii=False))
+        # requests = 模型调用次数（usage 行数），turns = 发言轮次（唯一 crid）
+        check("requests/turns 两个口径都在", tok["requests"] == 2 and tok["turns"] == 2,
+              json.dumps({"requests": tok["requests"], "turns": tok["turns"]}))
     finally:
         import shutil
         shutil.rmtree(tmp, ignore_errors=True)

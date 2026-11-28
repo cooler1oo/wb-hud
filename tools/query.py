@@ -203,7 +203,7 @@ def scan_model_map():
                             sub_crids.add(crid)
                     mdl = pd.get("requestModelId") or pd.get("model")
                     if mdl and crid not in maps:
-                        maps[crid] = [mdl, None]
+                        maps[crid] = [mdl, None, 0]
                     elif mdl and isinstance(maps.get(crid), list) and not maps[crid][0]:
                         maps[crid][0] = mdl
                     u = pd.get("usage")
@@ -220,6 +220,10 @@ def scan_model_map():
                         cur[2] += _cr
                         cur[3] += u.get("cache_creation_input_tokens") or 0
                         maps[crid][1] = cur
+                        # 第三条：该请求的 usage 行数 = 模型调用次数。
+                        # 一个 conversationRequestId 是多步流式（每行一条 usage、requests 恒为 1），
+                        # 所以"请求数"必须按行数算，按 crid 算会得到"发言轮次"。
+                        maps[crid][2] = (maps[crid][2] or 0) + 1
         except OSError:
             pass
     try:
@@ -239,23 +243,29 @@ def session_tokens(model_map, sid_of, sid, sub_crids=()):
     requests 按 crid 计（一个 crid = 一次 API 请求，多行是流式/多步）。
     """
     sub = set(sub_crids)
-    tot = {"input": 0, "output": 0, "cacheRead": 0, "cacheCreate": 0, "requests": 0}
-    s = {"input": 0, "output": 0, "cacheRead": 0, "cacheCreate": 0, "requests": 0}
+    tot = {"input": 0, "output": 0, "cacheRead": 0, "cacheCreate": 0,
+           "requests": 0, "turns": 0}
+    s = {"input": 0, "output": 0, "cacheRead": 0, "cacheCreate": 0,
+         "requests": 0, "turns": 0}
     for crid, pair in model_map.items():
         if sid_of.get(crid) != sid:
             continue
         u = pair[1] or [0, 0, 0, 0]
+        rows = pair[2] if len(pair) > 2 and pair[2] else 1
         tot["input"] += u[0]
         tot["output"] += u[1]
         tot["cacheRead"] += u[2]
         tot["cacheCreate"] += u[3]
-        tot["requests"] += 1
+        # requests = 模型调用次数（usage 行数）；turns = 发言轮次（唯一 conversationRequestId）
+        tot["requests"] += rows
+        tot["turns"] += 1
         if crid in sub:
             s["input"] += u[0]
             s["output"] += u[1]
             s["cacheRead"] += u[2]
             s["cacheCreate"] += u[3]
-            s["requests"] += 1
+            s["requests"] += rows
+            s["turns"] += 1
     tot["sub"] = s
     return tot
 
