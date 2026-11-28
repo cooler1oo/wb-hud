@@ -1198,7 +1198,7 @@
     }
     if (cfg("showCacheHitRate", true) && t.requests && t.input) {
       var hitPct = (t.cacheRead / t.input) * 100;
-      var tk = el("span", "hud-dim", "缓存命中 " + hitPct.toFixed(0) + "%");
+      var tk = el("span", "hud-dim", "缓存命中 " + hitPct.toFixed(1) + "%");
       tk.title = "提示缓存（prompt cache）：上一轮发过的上下文被服务端缓存，下一轮直接复用，按更低的单价计费。\n"
         + "命中 " + tok(t.cacheRead) + " / 输入 " + tok(t.input) + "，命中率 " + hitPct.toFixed(1) + "%\n"
         + "累计输出 " + tok(t.output) + "，共 " + t.requests + " 次请求"
@@ -1206,7 +1206,7 @@
           ? "\n其中子代理：输入 " + tok(t.sub.input) + " / 输出 " + tok(t.sub.output)
             + "（" + t.sub.requests + " 次请求）"
           : "");
-      addSide("缓存命中 " + hitPct.toFixed(0) + "%", tk.title);
+      addSide("缓存命中 " + hitPct.toFixed(1) + "%", tk.title);
     }
     if (cfg("showPromptCache", false) && (t.cacheRead || t.cacheCreate)) {
       addSide("cache " + tok(t.cacheRead) + (t.cacheCreate ? "+" + tok(t.cacheCreate) : ""),
@@ -1287,7 +1287,7 @@
     if (cfg("showCacheHitRate", true) && t.input) {
       var pC = pipe(); if (pC) l2.appendChild(pC);
       var chPct = (t.cacheRead / t.input) * 100;
-      var chEl = el("span", "hud-dim", "缓存 " + chPct.toFixed(0) + "%");
+      var chEl = el("span", "hud-dim", "缓存 " + chPct.toFixed(1) + "%");
       chEl.title = "提示缓存命中率：命中 " + tok(t.cacheRead) + " / 输入 " + tok(t.input)
         + "（含子代理）";
       l2.appendChild(chEl);
