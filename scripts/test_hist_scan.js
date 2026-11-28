@@ -141,6 +141,38 @@ try {
   ok("architect 时长 = 文件跨度之和（≈3 分钟，而非跨到 t2 的 9 分钟）",
     Math.abs(archMs - (t1 - t0)) < 5, archMs + " vs 首尾差 " + (t2 - t0));
   ok("会话合计仍正确（1,000 + 3,000,100 + 500,000）", h2.input === 3501100, String(h2.input));
+
+  // ---- 上下文变短（重建）事件：压缩标记之外的第二类信号 ----
+  // 背景：新版客户端压缩时不再写 cmp_ 标记（技术设计6 实测：0 标记，但 input 三次下跌
+  // 414k→360k、450k→307k、346k→309k）。只看标记会让「压缩」永远显示 0。
+  const SID3 = "cccc1111-2222-3333-4444-555566667777";
+  fs.mkdirSync(path.join(proj, SID3, "subagents"), { recursive: true });
+  const main3 = path.join(proj, SID3 + ".jsonl");
+  const sub3 = path.join(proj, SID3, "subagents", "agent-c.jsonl");
+  const T = Date.now() - 3600000;
+  const ctx = (i, ts) => row("01a21d6ab91b7a8783dbc6b9cb2" + String(100 + i), "deepseek-v4.1-flash", i, 10, 0, "", ts);
+  fs.writeFileSync(main3,
+    ctx(100000, T)                    // 起点
+    + ctx(200000, T + 60000)          // 涨
+    + ctx(150000, T + 120000)         // 跌 25% → 第 1 次事件
+    + ctx(100000, T + 180000)         // 6 分钟内继续跌 → 并入同一次（200k→100k = -50%）
+    + ctx(300000, T + 1500000)        // 25 分钟后重新长起来
+    + ctx(250000, T + 1560000));      // 跌 17% → 第 2 次事件
+  // 子代理自己的上下文暴跌不算本会话的压缩
+  fs.writeFileSync(sub3,
+    row("01a21d6ab91b7a8783dbc6b9cb2f01", "custom-local:deepseek-v4.1-flash-1017", 500000, 10, 0, "writer", T)
+    + row("01a21d6ab91b7a8783dbc6b9cb2f02", "custom-local:deepseek-v4.1-flash-1017", 100000, 10, 0, "writer", T + 60000));
+  FILES[SID3] = main3;
+
+  const h3 = api.histOf(SID3, main3);
+  const drops = h3.ctxDrops || [];
+  ok("识别出 2 次上下文变短（同一次的多段下跌合并）", drops.length === 2,
+    JSON.stringify(drops.map(d => Math.round(d.pct))));
+  ok("第 1 次幅度按整段算 = 50%", drops[0] && Math.abs(drops[0].pct - 50) < 0.5,
+    drops[0] && String(drops[0].pct));
+  ok("第 2 次幅度 = 17%", drops[1] && Math.abs(drops[1].pct - 16.7) < 0.6,
+    drops[1] && String(drops[1].pct));
+  ok("子代理的上下文暴跌不计入本会话", drops.length === 2, String(drops.length));
 } finally {
   fs.rmSync(tmp, { recursive: true, force: true });
 }

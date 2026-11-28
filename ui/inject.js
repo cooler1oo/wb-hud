@@ -1224,7 +1224,23 @@
       addSide(sp2 + " tok/s", "生成速度：输出 token ÷ 会话时长");
     }
     if (cfg("showCompactions", false) && s.compactions != null) {
-      addSide("压缩 " + s.compactions, "上下文压缩次数（cmp_ 事件）");
+      // 两个口径分开显示：
+      //   压缩 = 生成过摘要的压缩（旧客户端才写 cmp_ 标记，新版静默压缩 → 常为 0）
+      //   重建 = 上下文整体变短的次数（inputTokens 下跌 ≥10%，新旧客户端都能观测到）
+      var nCmp = s.compactions || 0;
+      var drops = s.ctxDrops || [];
+      var dTip = drops.length
+        ? "\n近几次：\n" + drops.slice(-5).map(function (x) {
+            var t2 = x.t ? new Date(x.t) : null;
+            var hh = t2 ? (String(t2.getMonth() + 1) + "/" + t2.getDate() + " "
+              + String(t2.getHours()).padStart(2, "0") + ":" + String(t2.getMinutes()).padStart(2, "0")) : "";
+            return "  " + hh + "  " + tok(x.from) + " → " + tok(x.to) + "（-" + x.pct + "%）";
+          }).join("\n")
+        : "";
+      addSide("压缩 " + nCmp + (drops.length ? " · 重建 " + drops.length : ""),
+        "压缩：生成过摘要的压缩次数（只有旧版客户端会写 cmp_ 标记，新版是静默的，所以常为 0）"
+        + "\n重建：上下文整体变短的次数（下一次请求的 inputTokens 比上一次少 10% 以上，"
+        + "同一次重建分几步跌会合并）" + dTip);
     }
     if (cfg("showSessionStartDate", false) && s.started) {
       addSide("起 " + fmtTime(s.started), "会话开始时间");

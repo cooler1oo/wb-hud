@@ -185,7 +185,7 @@
     // 版本号：聚合口径变更就递增，旧缓存自动作废并重扫。
     // v4（2026-11-28）：开始把 <会话ID>/subagents/*.jsonl 计入同一会话，
     // 旧缓存的数字本来就漏了子代理，继续用会"新代码 + 旧错数"。
-    var CACHE_VER = 5;
+    var CACHE_VER = 6;
     (function loadHistCache() {
       try {
         var fs2 = require('node:fs');
@@ -204,6 +204,7 @@
               if (!e.subAgents) e.subAgents = {};
               if (!e.subCridAgent) e.subCridAgent = {};
               if (!e._subFileAgent) e._subFileAgent = {};
+              if (!e.ctxDrops) e.ctxDrops = [];
               HIST[hk] = e;
             }
             HSCAN = {};
@@ -313,6 +314,8 @@
         sub: { input: 0, output: 0, requests: 0 },
         // 子代理按 agent 分组：动态（工具调用）、token、时长都要能单独看
         subAgents: {}, subCridAgent: {}, _subFileAgent: {},
+        // 上下文变短事件（新版客户端压缩时不写 cmp_ 标记，只能从 token 轨迹看出来）
+        ctxDrops: [], _lastInput: 0, _lastDropAt: 0,
         // 主线程最近一次请求：账本的"当前单位"只跟它走。
         // 子代理可能用另一套模型，让它带偏单位会显示错误的计费方式。
         lastMainAt: 0, lastMainModel: ''
@@ -327,6 +330,7 @@
       h.sub = { input: 0, output: 0, requests: 0 };
       h.lastMainAt = 0; h.lastMainModel = '';
       h.subAgents = {}; h.subCridAgent = {}; h._subFileAgent = {};
+      h.ctxDrops = []; h._lastInput = 0; h._lastDropAt = 0;
       var files = [fileMap()[sid]].concat(subFiles(sid));
       for (var i = 0; i < files.length; i++) {
         if (!files[i]) continue;
@@ -439,6 +443,30 @@
         }
         var ts = +d.timestamp || 0;
         if (ts) { if (!h.first) h.first = ts; if (ts > h.last) h.last = ts; }
+        // 上下文变短检测（只看主线程）：新版客户端压缩时不再写 cmp_ 标记，
+        // 唯一可观测的信号是下一次请求的 inputTokens 明显小于上一次。
+        // 实测（技术设计6）414,874→360,334 / 450,629→307,301 / 346,280→309,106，
+        // 三次都无标记；旧版（技术设计2）每次压缩都伴随 ≥53% 的下跌。
+        if (!isSub && i2) {
+          var prevI = h._lastInput || 0;
+          if (prevI >= 20000 && i2 < prevI * 0.9) {
+            var lastD = h.ctxDrops[h.ctxDrops.length - 1];
+            if (lastD && ts && (ts - (h._lastDropAt || 0)) <= 5 * 60000) {
+              // 同一次重建可能分几步跌：并入上一条，幅度按整段算
+              lastD.to = i2;
+              lastD.pct = Math.round((1 - i2 / lastD.from) * 10000) / 100;
+              h._lastDropAt = ts;
+            } else {
+              h.ctxDrops.push({
+                from: prevI, to: i2, t: ts || 0,
+                pct: Math.round((1 - i2 / prevI) * 10000) / 100
+              });
+              h._lastDropAt = ts || 0;
+              if (h.ctxDrops.length > 50) h.ctxDrops = h.ctxDrops.slice(-50);
+            }
+          }
+          h._lastInput = i2;
+        }
         var mk = (d.providerData && (d.providerData.requestModelId || d.providerData.model)) || '';
         if (mk) h.models[mk] = 1;
         if (sa) {
@@ -1159,6 +1187,8 @@
           updated: cur.updated_at,
           started: (HIST[String(cur.session_id)] || {}).first || 0,
           compactions: (HIST[String(cur.session_id)] || {}).compactions || 0,
+          // 上下文变短事件（新版客户端压缩无标记，只能靠 token 轨迹）：最近 10 次
+          ctxDrops: ((HIST[String(cur.session_id)] || {}).ctxDrops || []).slice(-10),
           title: st.title || (db.titleMap || {})[String(cur.session_id)] || ''
         },
         sessionList: rows.slice(0, 30).map(function (sr) {
